@@ -1,3 +1,5 @@
+# Matheus Burani 20260577
+
 # Baseline Predictive Pipeline -- ETAI
 
 This is the **starting point** for your semester project: a small but *complete* predictive pipeline -- every piece a real project needs (entry point, config, data loading, preprocessing, model, evaluation), just kept as simple as possible for now.
