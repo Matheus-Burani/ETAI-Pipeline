@@ -1,5 +1,14 @@
 # Matheus Burani 20260577
 
+We can see that the logistic regression model has a train accuracy of 0.679 and a test accuracy of 0.680, essentially no gap between the two. The decision tree (max_depth=5, min_samples_leaf=25, class_weight="balanced") has a train accuracy of 0.677 and a test accuracy of 0.667, a gap of about 0.010. Both gaps are small, which means that with these constraints (limited depth, minimum samples per leaf) the decision tree is not memorizing the training data — it is generalizing about as well as the logistic regression model, not worse.
+
+We can also see that the results for precision, recall and F1 score (for the recidivism/positive class) were respectively:
+
+0.62, 0.67, 0.65 – decision tree
+0.66, 0.60, 0.63 – logistic regression
+
+Here we can notice a trade-off rather than one model being strictly better: logistic regression has higher precision, meaning that when it predicts recidivism it is right more often, while the decision tree has higher recall, meaning it catches more of the people who actually do reoffend.
+
 # Baseline Predictive Pipeline -- ETAI
 
 This is the **starting point** for your semester project: a small but *complete* predictive pipeline -- every piece a real project needs (entry point, config, data loading, preprocessing, model, evaluation), just kept as simple as possible for now.
