@@ -12,7 +12,11 @@ split:
   random_state: 42
 
 model:
+<<<<<<< HEAD
   type: "decision_tree"
+=======
+  type: "decision_tree" #"logistic_regression"
+>>>>>>> a2b48d9e25446747c0bacab3d28b99f04c51ad64
   params:
     max_depth: 5
     min_samples_leaf: 25
