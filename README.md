@@ -7,9 +7,6 @@ The task: predict two-year recidivism using ProPublica's COMPAS
 dataset -- the data behind a real 2016 investigation into a risk-
 assessment algorithm actually used by US courts to help inform bail and sentencing decisions. See `data/README.md` for the full problem description and a complete data dictionary before you start.
 
-It has some **deliberately weak spots**. Part of your work this
-semester is finding them and making them better -- see the pipeline progress table below, which tracks what changes and why as the weeks
-go on.
 
 ## Project structure
 
@@ -32,28 +29,26 @@ go on.
 
 ## Pipeline progress
 
-This table is updated after each practical class, so you can always see what changed in the pipeline and why -- it's a running log, not a fixed syllabus.
 
 | Week | Practical class focus | Added to the pipeline |
 |------|------------------------|------------------------|
 | 2 | Introduction & baseline pipeline | Initial version: project structure, a single naive train/test split (no cross-validation), minimal preprocessing (drop rows with missing values, one-hot encode categoricals), logistic regression baseline, a first (deliberately simple) fairness check comparing our model's and COMPAS's own false-positive rate by race, train-vs-test accuracy reporting (to start spotting overfitting), and each run's full report saved automatically to `results/` |
+| 3 | EDA + preprocessing -- diagnose the data, then fix it | `src/data_diagnostics.py` (missingness-mechanism test via chi-square + Cramér's V, domain-rule invalid-value detection, two-way duplicate check) and `src/preprocessing.py` (leak-safe category cleanup, mechanism-matched imputation with `_was_missing` indicators for MNAR columns, a deployable `ColumnTransformer`, **and** the train/test split itself, all in the one file rather than split across two) replace the old naive `dropna()`/`pd.get_dummies()` preprocessing; encoder/scaler pair (count encoding + robust scaling) chosen by an empirical grid over 15 repeated splits, checked against the runner-up with a paired comparison so the win isn't just noise; three redundant columns (found via correlation + VIF) dropped; `config.yaml` gains `diagnostics` and `preprocessing` sections -- see "Preprocessing decisions" below. |
 
 ## Environment setup
 
-You only need to do this once per machine.
-
 ### macOS / Linux
 ```bash
-python3 -m venv venv                 # creates an isolated Python environment in a folder called "venv"
-source venv/bin/activate             # activates it -- packages install here, not system-wide, and stay out of your other projects
-pip install -r requirements.txt      # installs the exact packages this project needs, into that environment
+python3 -m venv venv                 
+source venv/bin/activate              
+pip install -r requirements.txt     
 ```
 
 ### Windows -- PowerShell
 ```powershell
-python -m venv venv                  # creates an isolated Python environment in a folder called "venv"
-venv\Scripts\activate                # activates it -- packages install here, not system-wide, and stay out of your other projects
-pip install -r requirements.txt      # installs the exact packages this project needs, into that environment
+python -m venv venv                 
+venv\Scripts\activate                
+pip install -r requirements.txt 
 ```
 If PowerShell blocks the activation script, run this once first:
 ```powershell
@@ -67,8 +62,6 @@ python -m venv venv
 venv\Scripts\activate.bat
 pip install -r requirements.txt
 ```
-
-Once the environment is active you'll see `(venv)` at the start of your prompt. To leave it later, run `deactivate` (same command on every OS).
 
 ### Every time after the first
 
