@@ -1,0 +1,2 @@
+[0918/112151.451:ERROR:third_party\crashpad\crashpad\util\win\registration_protocol_win.cc:108] CreateFile: O sistema não conseguiu localizar o ficheiro especificado. (0x2)
+[0918/112151.752:ERROR:third_party\crashpad\crashpad\util\win\registration_protocol_win.cc:108] CreateFile: O sistema não conseguiu localizar o ficheiro especificado. (0x2)
