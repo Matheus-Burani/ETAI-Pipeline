@@ -72,27 +72,24 @@ def oof_classification_report(y_true, y_pred) -> str:
     return text
 
 
-def fairness_report(y_test, y_pred, extras_test: pd.DataFrame, sensitive_attr: str = "race") -> str:
+def fairness_report(y_true, y_pred, extras: pd.DataFrame, sensitive_attr: str = "race") -> str:
     """
-    Deliberately simple fairness check -- not a substitute for a real audit, just enough to show that "accuracy" and "fair" are not the same thing.
-
-    For each race group, prints (and returns as text) the false
-    positive rate (share of people who did NOT reoffend but were
-    predicted to) for:
-        - our own model
-        - COMPAS's own risk score (score_text != "Low" counts as a "high risk" prediction), for comparison
+    False positive rate (share of people who did not reoffend but were predicted to) per
+    group of `sensitive_attr`, for the model's predictions and for COMPAS's own score
+    (`score_text` other than "Low" counts as predicted to reoffend), on the same rows.
+    Rows with an unknown group are reported as "unknown". A simple check, not a full audit.
     """
-    df = extras_test.copy()
-    df["y_true"] = y_test.values
+    df = extras.copy()
+    df[sensitive_attr] = df[sensitive_attr].astype(object).fillna("unknown")
+    df["y_true"] = pd.Series(y_true).values
     df["y_pred_model"] = y_pred
     df["y_pred_compas"] = (df["score_text"] != "Low").astype(int)
 
     lines = [
-        "False positive rate by race",
+        f"False positive rate by {sensitive_attr} (development set, out-of-fold)",
         "(share of people who did NOT reoffend, but were predicted to)",
         "",
     ]
-
     for label, col in [("Our model", "y_pred_model"), ("COMPAS's own score", "y_pred_compas")]:
         lines.append(f"  {label}:")
         for group, g in df.groupby(sensitive_attr):

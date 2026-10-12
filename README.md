@@ -35,7 +35,7 @@ assessment algorithm actually used by US courts to help inform bail and sentenci
 | 2 | Introduction & baseline pipeline | Initial version: project structure, a single naive train/test split (no cross-validation), minimal preprocessing (drop rows with missing values, one-hot encode categoricals), logistic regression baseline, a first (deliberately simple) fairness check comparing our model's and COMPAS's own false-positive rate by race, train-vs-test accuracy reporting (to start spotting overfitting), and each run's full report saved automatically to `results/` |
 | 3 | EDA + preprocessing -- diagnose the data, then fix it | `src/data_diagnostics.py` (missingness-mechanism test via chi-square + Cramér's V, domain-rule invalid-value detection, two-way duplicate check) and `src/preprocessing.py` (leak-safe category cleanup, mechanism-matched imputation with `_was_missing` indicators for MNAR columns, a deployable `ColumnTransformer`, **and** the train/test split itself, all in the one file rather than split across two) replace the old naive `dropna()`/`pd.get_dummies()` preprocessing; encoder/scaler pair (count encoding + robust scaling) chosen by an empirical grid over 15 repeated splits, checked against the runner-up with a paired comparison so the win isn't just noise; three redundant columns (found via correlation + VIF) dropped; `config.yaml` gains `diagnostics` and `preprocessing` sections -- see "Preprocessing decisions" below. |
 | 4 | Preprocessing inside the pipeline + cross-validation -- evaluating a model honestly | A **locked final test set** (20%, stratified, seed 42) is set aside by `split_dev_test()` (replaces `split_train_test()`) and never scored; models are now judged by **stratified 5-fold cross-validation** of the whole pipeline (preprocessing + model) on the development set, reported per fold with mean ± std and the train-validation gap; the classification report and fairness check now use out-of-fold predictions; target encoding switched to scikit-learn's cross-fitting `TargetEncoder` (a row's own label never leaks into its own encoding), encoder/scaler set by hand in `config.yaml` (target encoding + robust scaling, reasons in the comments); **two fixes** in `clean_dataset()`: genuine `NaN`s in categorical columns were being turned into the string `"nan"` (a fake category), so 229 `c_charge_degree` gaps were never imputed or flagged -- fixed in `config.yaml` alone: `"nan"` added to `diagnostics.placeholder_tokens` (the category cleanup's last step turns listed tokens into `NaN`, after its text conversion); and it no longer drops rows -- de-duplication moved to a separate, training-only `drop_duplicate_rows()` (run before the dev/test split), so the same cleaning can run on new data where every row needs a prediction; `src/data_diagnostics.py` removed -- its one cleaning function (`flag_invalid_values`) moved into `preprocessing.py`, and the EDA-only checks (missingness test, duplicate counts) live in the EDA notebooks, not in every pipeline run; `dummy` (majority-class) model added as the floor to beat, and `random_forest` registered (sensible defaults, untuned); the final model is refit on the whole development set after CV; `config.yaml` gains `test_set` and `cv` sections -- see "Model evaluation" below |
-
+| 5 | Hyperparameter tuning without leakage | New `src/tuning.py`: hyperparameters are tuned with **Optuna** (seeded TPE sampler) on the development set only -- every candidate is scored by stratified 5-fold CV of the **whole** pipeline (preprocessing re-fit in every fold of every trial), on the same folds for every candidate; the tuning procedure is estimated honestly by **nested cross-validation** (the tuning repeated inside each outer CV fold, scored on the outer fold it never saw), whose out-of-fold predictions now feed the classification report and fairness check; the reported "best trial" score is shown next to the nested one as an optimism check; the final model is the tuned pipeline refit on all development rows; `build_pipeline()` in `src/model.py` now builds the preprocessing + model `Pipeline` (one place to add a learned step later); `config.yaml` gains a `tuning` section (on/off, trials, inner folds, seed, one search space per model type) and the model becomes the decision tree; `optuna` added to `requirements.txt`. The locked test set is still untouched -- see "Hyperparameter tuning" below |
 ## Environment setup
 
 ### macOS / Linux
@@ -109,7 +109,7 @@ See `data/README.md`.
 
 # Matheus Burani 20260577
 
-## week 2 improvements and results
+## Week 2
 
 We can see that in Week 2, the logistic regression model has a train accuracy of 0.679 and a test accuracy of 0.680, essentially no difference between the two. The decision tree (max_depth=5, min_samples_leaf=25, class_weight="balanced") has a train accuracy of   0.677 and a test accuracy of 0.667, a gap of about 0.010. Both gaps are small, which means that with these constraints the decision tree is not memorizing the training data, it is generalizing about as well as the logistic regression model, not worse.
 
@@ -120,7 +120,7 @@ It is possible to observe that the results for precision, recall and F1 score (f
 
 Here we can notice a trade-off rather than one model being strictly better: logistic regression has higher precision, meaning that when it predicts recidivism it is right more often, while the decision tree has higher recall, meaning it catches more of the people who actually do reoffend.
 
-## week 3 improvements and results
+## Week 3
 
 ### What changed between the week 2 and week 3? 
 
@@ -147,12 +147,12 @@ Here the decision tree barely moves at all between weeks — precision, recall, 
 
 Taken together, the trade-off that existed within Week 2 (logistic regression favoring precision, the decision tree favoring recall) still holds in Week 3, but it's become more lopsided: the decision tree kept its balance across both weeks, while logistic regression lost a substantial chunk of its recall, making the gap between the two models wider than it was before.
 
-## Week 3 Improvements
+## Week 4
 
 Prepareded the preprocessing for the introduction of cross-validating methods and introduced the Random Forests as an algorithm for the model
 
 
-# Preprocessing decisions
+### Preprocessing decisions
 
 | Column(s) | Issue found | Mechanism | What was done |
 |---|---|---|---|
@@ -169,7 +169,7 @@ Prepareded the preprocessing for the introduction of cross-validating methods an
 
 **Encoder/scaler pair:** chosen by hand in `config.yaml` -- **target encoding** (compact, informative and **robust scaling** (median/IQR, so the few extreme counts don't set the scale). The alternatives (`onehot`/`ordinal`/`count`, `none`/`standard`/`minmax`) are one config change away.
 
-# Results
+### Results
 
 Model performance
 
@@ -186,3 +186,40 @@ The decision tree barely moves between weeks (recall 0.67 to 0.65, F1 0.64 to 0.
 On fairness, the picture is stable. The false positive rate for African-American versus Caucasian defendants is 0.26 vs 0.13 for logistic regression (2.0x, the same as Week 3), 0.41 vs 0.26 for the decision tree (1.58x, down slightly from 1.73x), and 0.36 vs 0.23 for the random forest (1.57x). COMPAS is at 0.45 vs 0.23 (1.96x). Logistic regression has the lowest absolute FPRs, but only because it predicts "reoffend" less often, and its ratio is as bad as COMPAS's. The tree's small improvement in ratio is not large enough to call a real change. The Hispanic and Other groups moved between weeks mainly because Week 3 had only 54 to 85 people per group, and the Week 4 groups (311 and 185) are more reliable. The Asian (n=21) and Native American (n=6) figures are still too small to interpret.
 
 Taken together, the Week 3 trade-off still holds in Week 4: logistic regression favors precision and the decision tree favors recall. What changed is mostly the quality of the evidence, since cross-validation on four times as much data shows that the two models are tied on accuracy at about 0.66 and that neither reduces the roughly 2x disparity in false positives. The random forest is the only model that clearly loses, because of overfitting. One caveat for the write-up is that the Week 3 test split is the same one Week 4 labels as locked, so it is no longer completely untouched for logistic regression and the tree.
+
+## Week 5
+### Improvements - Hyperparameter tuning 
+
+
+*(Walkthrough: `Practical/W5/notebooks/04_hyperparameter_tuning.ipynb`.)* With `tuning.enabled: true` in `config.yaml`, `python main.py` also:
+
+1. **Nested cross-validation** -- for each of the 5 outer CV folds, runs a full Optuna study on the outer-training rows only (each trial = 5-fold CV of the whole pipeline), refits the best candidate on those rows and scores it on the outer-validation fold. This is the honest estimate of the tuned model.
+2. **Tuning on the whole development set** -- the same study, once, on every development row: these are the hyperparameters the final model uses.
+
+The best trial's score is printed too, but it is **optimistic** (the maximum of many noisy CV scores) -- report the nested one. Search spaces live in `config.yaml` under `tuning.search_spaces`, one per model type, keyed by Pipeline parameter name (`model__max_depth`); a model without a search space can't be tuned until you add one. Cost: `(cv.n_splits + 1) x n_trials x tuning.n_splits` fits.
+
+### Results
+
+The dummy baseline predicts “did not reoffend” for everyone and scores 0.549 accuracy in every fold. That is just the share of class 0 in the development set (3,170 of 5,771), so any real model has to beat 0.549. It never flags anyone, so its class 1 precision, recall and F1 are all 0.00, and its macro F1 is only 0.35.
+
+This week’s models are all clearly above that floor, but the amount depends on whether they are tuned. With only the default config, logistic regression reaches 0.672 validation accuracy (+0.123 over the dummy), the random forest 0.647 (+0.098) and the decision tree 0.610 (+0.061). The unconstrained tree and forest both show a train/validation gap of +0.085, which means they memorize the training data. The tree loses most of its advantage over the dummy this way. After tuning, measured with nested CV, which is the honest estimate, all three models land close together:
+
+0.678, gap +0.002 – logistic regression (C≈0.0025, balanced)
+0.678, gap +0.010 – random forest (max_depth 22, min_samples_leaf 56, max_features 0.5)
+0.672, gap +0.013 – decision tree (max_depth 6, min_samples_leaf 101, gini)
+
+That is about +0.12 to +0.13 over the dummy for every model. Tuning helps the tree (0.610 to 0.672) and forest (0.647 to 0.678) a lot because it removes the overfitting. It barely changes logistic regression (0.672 to 0.678), which was already well regularized. The three tuned scores sit within one fold-level standard deviation (0.015 to 0.017), so there is no meaningful ranking. The optimism check is small for all of them (+0.002 to +0.004), so the tuning is not inflating the results. The top Optuna trials are also nearly identical (about 0.677 to 0.681), so the tuning surface is flat.
+
+Precision, recall and F1 for class 1 (reoffended), from the out-of-fold predictions (their accuracies match the nested CV scores, so I read them as the tuned models):
+
+0.00, 0.00, 0.00 – dummy
+0.67, 0.54, 0.60 – decision tree
+0.67, 0.57, 0.61 – random forest
+0.67, 0.57, 0.61 – logistic regression
+
+This is where the baseline matters most. The dummy gets 55% accuracy while finding none of the people who reoffend, and the models find 54% to 57% of them at 67% precision. The three models are nearly identical, with the tree slightly lower on recall. Compared with Week 4, the logistic regression and the tree are less different in their error profile now. The balanced tree’s recall of 0.65 has dropped to 0.54, because the tuned tree no longer uses class_weight='balanced'. Logistic regression’s recall rose from 0.51 to 0.57 because tuning selected class_weight='balanced'.
+
+On fairness, the dummy’s false positive rate is 0.00 for every group. This is trivially “fair” because it never predicts reoffending, which shows that FPR is only meaningful together with recall. For the models, the false positive rate for African-American versus Caucasian defendants is 0.29 vs 0.17 for the tree (1.71x), 0.30 vs 0.17 for the forest (1.76x), and 0.31 vs 0.18 for logistic regression (1.72x). COMPAS is at 0.45 vs 0.23 (1.96x). All three models have lower absolute FPRs than COMPAS, and a somewhat smaller ratio. But all still flag non-reoffending African-American defendants at about 1.7 times the rate of Caucasian ones, so no model removes the disparity. The Asian (n=21), Native American (n=6) and new “unknown” (n=66) groups are too small to interpret.
+
+Taken together, the baseline confirms the models learn real signal (about +0.13 over predicting the majority class), but also that the ceiling is low. All three tuned models plateau around 0.67 to 0.68 and a tuned logistic regression with very strong regularization (C≈0.0025) matches a random forest, which suggests the features carry limited signal. So the simplest model is the best choice by default: logistic regression ties the forest on accuracy, F1 and fairness, and has the smallest train/validation gap. One caveat is that the tuned numbers come from the nested CV procedure, while the final models are refit on the full development set with the Optuna-selected hyperparameters, whose best CV scores (0.679 to 0.681) are optimistic.
+

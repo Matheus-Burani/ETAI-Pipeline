@@ -1,8 +1,6 @@
 """
 Saving each run's results to disk.
 
-Writes each run's full report (cross-validation scores, classification report, fairness table)
-to a timestamped file in `results/`, so runs can be compared after changing config.yaml.
 """
 import os
 from datetime import datetime
@@ -10,9 +8,8 @@ from datetime import datetime
 
 def save_run(results_dir: str, config: dict, report_text: str) -> str:
     """
-    Writes one run's full report to a timestamped .txt file inside
-    `results_dir` (created automatically if it doesn't exist yet) and
-    returns the path that was written.
+        Writes the run's settings and full report to `results_dir/run_<timestamp>.txt` (the
+    folder is created if needed) and returns the path.
     """
     os.makedirs(results_dir, exist_ok=True)
 
@@ -20,6 +17,10 @@ def save_run(results_dir: str, config: dict, report_text: str) -> str:
     path = os.path.join(results_dir, f"run_{timestamp}.txt")
 
     cv = config["cv"]
+    tuning = config.get("tuning", {})
+    tuning_line = (f"Optuna, {tuning['n_trials']} trials x {tuning['n_splits']} folds, nested CV  "
+                   f"random_state={tuning['random_state']}" if tuning.get("enabled") else "off")
+    
     header = (
         f"Run: {timestamp}\n"
         f"Model: {config['model']['type']}  params={config['model'].get('params')}\n"
