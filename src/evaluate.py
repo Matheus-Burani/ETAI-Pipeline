@@ -1,36 +1,25 @@
 """
-Evaluation -- stratified k-fold cross-validation on the development set:
-
-  - the development set is split into k folds (stratified: each fold keeps the same
-    share of reoffenders as the whole set);
-  - the whole Pipeline (preprocessing + model) is fit k times, each time on k-1 folds,
-    and scored on the fold it did not see;
-  - we report every fold's score, their mean AND their standard deviation. The std is
-    the honest "how much would this number move with different data" -- a mean alone
-    hides it.
-
-
+Evaluation on the development set: stratified k-fold cross-validation of the whole pipeline,
+out-of-fold reports, a fairness check and a paired comparison of two models. The locked test
+set is never used here.
 """
 import numpy as np
 import pandas as pd
+from scipy import stats
 from sklearn.metrics import classification_report
 from sklearn.model_selection import cross_validate
 
 
 def cross_validate_pipeline(pipeline, X, y, cv, scoring: str = "accuracy", n_jobs: int = 1):
     """
-    Fits a fresh copy of `pipeline` on each fold's training part and scores it on that
-    fold's validation part. Because `pipeline` contains the preprocessing too, imputation
-    medians, encoder statistics and scaler means are re-learned inside every fold -- the
-    validation fold never influences its own preprocessing.
+    Fits a fresh copy of `pipeline` (preprocessing included) on each fold's training part and
+    scores it on that fold's validation part.
 
     Returns (fold_scores, y_oof):
-      - fold_scores: one row per fold -- train score, validation score, and the gap between
-        them (a large, consistent gap = overfitting).
-      - y_oof: out-of-fold predictions. Every row gets a prediction from the one fold model
-        that did NOT train on it, so all of them are "unseen" -- what the classification
-        report and fairness check are computed on (more rows, and the locked test set stays
-        untouched). Taken from the same fits as the scores, so nothing is fitted twice.
+      - fold_scores: one row per fold with the train score, the validation score and their gap;
+      - y_oof: out-of-fold predictions, each row predicted by the fold model that did not
+        train on it, taken from the same fits as the scores. `cv` must be a partition
+        (each row validated exactly once).
     """
     scores = cross_validate(pipeline, X, y, cv=cv, scoring=scoring, return_train_score=True,
                             return_estimator=True, return_indices=True, n_jobs=n_jobs)
@@ -48,7 +37,7 @@ def cross_validate_pipeline(pipeline, X, y, cv, scoring: str = "accuracy", n_job
 
 
 def cv_report(fold_scores: pd.DataFrame, scoring: str = "accuracy") -> str:
-    """Per-fold table + mean +/- std, as text (printed, and saved to results/)."""
+    """Per-fold table with mean and std, as text (printed and returned)."""
     lines = [
         f"Cross-validation ({len(fold_scores)} stratified folds, metric: {scoring})",
         "",
@@ -64,8 +53,26 @@ def cv_report(fold_scores: pd.DataFrame, scoring: str = "accuracy") -> str:
     return text
 
 
+def corrected_paired_test(scores_a, scores_b, test_train_ratio: float) -> dict:
+    """
+    Corrected paired t-test (Nadeau & Bengio, 2003) for two models scored on the same CV folds.
+    Folds share most of their training rows, so their scores are correlated and the plain
+    t-test is overconfident; the variance of the differences is inflated by `test_train_ratio`
+    (validation rows / training rows per fold: 1 / (k - 1) for k-fold).
+
+    Returns the mean difference (a - b), the folds where a scores higher, t and the two-sided
+    p-value.
+    """
+    diff = np.asarray(scores_a, dtype=float) - np.asarray(scores_b, dtype=float)
+    k = len(diff)
+    se = np.sqrt((1 / k + test_train_ratio) * diff.var(ddof=1))
+    t = float(diff.mean() / se) if se > 0 else 0.0
+    p_value = float(2 * stats.t.sf(abs(t), df=k - 1))
+    return {"mean_diff": float(diff.mean()), "wins": f"{int((diff > 0).sum())}/{k}", "t": t, "p_value": p_value}
+
+
 def oof_classification_report(y_true, y_pred) -> str:
-    """Classification report on the out-of-fold predictions."""
+    """Classification report on the out-of-fold predictions, as text (printed and returned)."""
     text = "Classification report (out-of-fold predictions, development set):\n" + \
         classification_report(y_true, y_pred, zero_division=0)
     print(text)

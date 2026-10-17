@@ -5,6 +5,16 @@ Tuning uses the development set only, and scores every candidate by cross-valida
 whole pipeline on the same folds. The best trial's score is the maximum of many noisy scores,
 so it is optimistic; the honest estimate of "tune, then refit" comes from
 `nested_cross_validate`.
+
+Preprocessing can be tuned too, because it lives inside the Pipeline: every trial re-fits it
+on the training part of each fold, so tuning it is as leak-free as tuning the model. Two kinds
+of search-space entries reach it:
+  - ordinary Pipeline parameters, e.g. `prep__numeric__impute__strategy` (a string option),
+    which are passed to `set_params` as they are;
+  - the two *choices of object*, `prep__numeric__scale` (scaler) and
+    `prep__categorical__encode` (encoder). A YAML file can only hold names, so these are
+    written as categorical choices of names ("robust", "standard", "onehot", "target", ...)
+    and turned into fresh scaler/encoder objects by `_resolve_params`.
 """
 import numpy as np
 import optuna
@@ -13,14 +23,34 @@ from sklearn.base import clone
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import cross_val_score
 
+from src.preprocessing import _SCALERS, _ENCODERS
+
+SCALER_KEY = "prep__numeric__scale"
+ENCODER_KEY = "prep__categorical__encode"
+
+
+def _resolve_params(params: dict, random_state: int) -> dict:
+    """
+    Turns the names chosen for the scaler and the encoder into real objects, using the same
+    registries as `build_preprocessor`; every other parameter is passed through unchanged.
+    A new object is built on every call, so trials never share a fitted scaler or encoder.
+    """
+    out = dict(params)
+    if SCALER_KEY in out:
+        factory = _SCALERS[out[SCALER_KEY]]
+        out[SCALER_KEY] = factory() if callable(factory) else factory      # "none" -> "passthrough"
+    if ENCODER_KEY in out:
+        out[ENCODER_KEY] = _ENCODERS[out[ENCODER_KEY]](random_state)
+    return out
+
 
 def tune_pipeline(pipeline, X, y, cv, scoring: str, search_space: dict, n_trials: int,
                   random_state: int, n_jobs: int = 1):
     """
     Runs an Optuna study (seeded TPE sampler) on (X, y). Each trial draws one value per entry
     of `search_space` (`type`: int / float / categorical; keys are Pipeline parameter names,
-    e.g. `model__max_depth`), sets them on a fresh copy of `pipeline`, and returns its mean
-    CV score over `cv`.
+    e.g. `model__max_depth` or `prep__numeric__impute__strategy`), sets them on a fresh copy
+    of `pipeline`, and returns its mean CV score over `cv`.
 
     Returns (best_pipeline, study): an unfitted copy of `pipeline` with the best trial's
     hyperparameters, and the study with every trial (mean score and fold std).
@@ -37,14 +67,14 @@ def tune_pipeline(pipeline, X, y, cv, scoring: str, search_space: dict, n_trials
             else:
                 raise ValueError(f"Unknown search-space type for {name}: {spec['type']}. "
                                  "Options: int, float, categorical")
-        candidate = clone(pipeline).set_params(**params)
+        candidate = clone(pipeline).set_params(**_resolve_params(params, random_state))
         scores = cross_val_score(candidate, X, y, cv=cv, scoring=scoring, n_jobs=n_jobs)
         trial.set_user_attr("std", float(scores.std(ddof=1)))
         return scores.mean()
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=random_state))
     study.optimize(objective, n_trials=n_trials)
-    best_pipeline = clone(pipeline).set_params(**study.best_params)
+    best_pipeline = clone(pipeline).set_params(**_resolve_params(study.best_params, random_state))
     return best_pipeline, study
 
 

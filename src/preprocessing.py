@@ -1,11 +1,12 @@
 """
 Preprocessing -- raw data in, model-ready data out: category cleanup, domain-rule and
-placeholder -> NaN conversion, training-only de-duplication, the feature/target split,
+placeholder -> NaN conversion, training-only de-duplication, fixed-rule engineered features,
+the feature/target split,
 a leak-safe encoder/scaler preprocessor, and the split that sets the final test set aside.
 One file, one obvious place to look for "how does raw data become model-ready".
 
 Two things every function here respects, on purpose:
-  - leak-safe: `clean_dataset` and `split_features_target` learn nothing from the data
+  - leak-safe: `clean_dataset`, `add_engineered_features` and `split_features_target` learn nothing from the data
     (no means, no category lists, no target), so they are safe to run on any rows.
     Everything that IS learned from data -- imputation, encoding, scaling -- lives inside
     `build_preprocessor`'s ColumnTransformer, which sits inside the model's sklearn
@@ -96,6 +97,33 @@ def drop_duplicate_rows(df: pd.DataFrame, id_column: str = None) -> pd.DataFrame
     out = df.drop_duplicates()
     if id_column and id_column in out.columns:
         out = out.drop_duplicates(subset=id_column, keep="first")
+    return out
+
+
+# Rows older than this count as "young" (matches the dataset's own "Less than 25" age band).
+YOUNG_AGE = 25
+
+
+def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Returns a copy of `df` with three extra numeric columns built from `age` and
+    `priors_count`; every other column and every row is left as it was:
+      - priors_per_adult_year: priors_count divided by the years lived as an adult
+        (age - 17, never below 1). A ratio: 5 priors at 20 is not the same record as
+        5 priors at 50.
+      - log_priors: log(1 + priors_count). Compresses the long right tail of the counts,
+        so the gap between 0 and 2 priors weighs more than the gap between 20 and 22.
+      - young_x_priors: priors_count for people younger than YOUNG_AGE, 0 for everyone
+        else. An interaction: priors only count for the young group.
+
+    Each value comes from a fixed formula on the same row, so nothing is learned from the
+    data (no mean, no quantile, no target). If an input is missing, the new value is NaN.
+    """
+    out = df.copy()
+    adult_years = (out["age"] - 17).clip(lower=1)
+    out["priors_per_adult_year"] = out["priors_count"] / adult_years
+    out["log_priors"] = np.log1p(out["priors_count"])
+    out["young_x_priors"] = out["priors_count"].where(out["age"] < YOUNG_AGE, 0.0).where(out["age"].notna())
     return out
 
 
