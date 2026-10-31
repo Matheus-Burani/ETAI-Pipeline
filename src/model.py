@@ -32,7 +32,6 @@ def oblique_random_forest(n_estimators: int = 100, n_components: int = 10, densi
     return BaggingClassifier(estimator=oblique_tree, n_estimators=n_estimators,
                              random_state=random_state, n_jobs=n_jobs)
 
-
 _MODELS = {
     "dummy": DummyClassifier,
     "logistic_regression": LogisticRegression,
@@ -40,7 +39,11 @@ _MODELS = {
     "random_forest": RandomForestClassifier,
     "oblique_random_forest": oblique_random_forest,
     "adaboost": adaboost,
+    "gradient_boosting": GradientBoostingClassifier,
+    "hist_gradient_boosting": HistGradientBoostingClassifier,
+    "naive_bayes": GaussianNB,
 }
+
 
 
 
