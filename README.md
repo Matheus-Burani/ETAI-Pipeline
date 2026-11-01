@@ -277,3 +277,70 @@ corrected_paired_test(runs.loc[0, folds], runs.loc[1, folds], test_train_ratio=1
 ```
 
 It returns the mean difference, the folds the first run wins, t and the p-value.
+
+
+# Results week 7
+
+## Week 7 – Model comparison with ROC-AUC as the selection metric
+
+### What changed this week
+- The selection metric changed from accuracy to **ROC-AUC**, which measures how well a model ranks people by risk independently of any threshold. The no-model floor is therefore 0.500 (the earlier accuracy floor of 0.549 no longer applies).
+- Eight models were evaluated with the same 5-fold stratified CV, 30 Optuna trials and nested CV: naive Bayes, logistic regression, decision tree, random forest, oblique random forest, AdaBoost, gradient boosting and hist gradient boosting.
+- The tuning search now also covers preprocessing (imputation strategy, categorical encoding and, for logistic regression, scaling).
+- The locked test set (1,443 rows) is still unevaluated.
+
+### Results (ROC-AUC, development set, 5,771 rows)
+
+| Model | Default CV | Tuned nested CV (mean ± std) | Tuning gain | Optimism | Default gap | Tuned gap |
+|---|---|---|---|---|---|---|
+| Gradient boosting | 0.727 | **0.727 ± 0.014** | 0.000 | ≈0.000 | +0.022 | +0.012 |
+| Hist gradient boosting | 0.717 | **0.727 ± 0.016** | +0.010 | ≈0.000 | +0.058 | +0.014 |
+| AdaBoost | 0.723 | 0.726 ± 0.014 | +0.003 | -0.001 | +0.005 | +0.014 |
+| Oblique random forest | 0.685 | 0.726 ± 0.016 | +0.041 | ≈0.000 | +0.150 | +0.020 |
+| Random forest | 0.683 | 0.726 ± 0.018 | +0.043 | ≈0.000 | +0.121 | +0.024 |
+| Logistic regression | 0.719 | 0.722 ± 0.016 | +0.003 | ≈0.000 | +0.002 | +0.001 |
+| Decision tree | 0.604 | 0.719 ± 0.014 | +0.115 | -0.001 | +0.110 | +0.016 |
+| Naive Bayes | 0.685 | 0.705 ± 0.012 | +0.020 | ≈0.000 | +0.002 | +0.001 |
+| Dummy (floor) | 0.500 | – | – | – | – | – |
+
+Chosen hyperparameters (tuning on the whole development set):
+
+| Model | Hyperparameters |
+|---|---|
+| Gradient boosting | n_estimators=426, learning_rate=0.012, max_depth=3, min_samples_leaf=2, subsample=0.77 |
+| Hist gradient boosting | max_iter=82, learning_rate=0.111, max_leaf_nodes=4, min_samples_leaf=130, l2=0.0007 |
+| AdaBoost | base tree max_depth=5, n_estimators=254, learning_rate=0.052, mean imputation, ordinal encoding |
+| Oblique random forest | max_depth=20, min_samples_leaf=127, n_components=5, median imputation, target encoding |
+| Random forest | max_depth=15, min_samples_leaf=47, max_features=0.5, median imputation, ordinal encoding |
+| Logistic regression | C=0.0008, class_weight=None, mean imputation, robust scaling, ordinal encoding |
+| Decision tree | max_depth=6, min_samples_leaf=81, gini, median imputation, one-hot encoding |
+| Naive Bayes | var_smoothing=0.091 |
+
+**Interpretation.** All models are well above the 0.500 floor (about +0.22 for the top group), so they learn real signal. The six best models are separated by only 0.008 ROC-AUC (0.719 to 0.727), less than the fold-level standard deviation (0.014 to 0.018), so they are statistically tied. Gradient boosting is nominally first, but its edge over logistic regression (+0.005) is small, even though it was ahead in four of five outer folds and tied in the other. Naive Bayes is the only model clearly behind, about 0.02 below the rest, which is consistent with its independence assumption not holding for correlated features.
+
+Tuning matters most for the models that overfit by default. The decision tree gains +0.115 and the random forests about +0.04, because tuning shrinks their train/validation gaps from +0.11 to +0.15 down to +0.016 to +0.024. Logistic regression, AdaBoost and gradient boosting gain almost nothing because their defaults were already well regularized. The best configurations are all simple: shallow trees (depth 3 for gradient boosting, 4 leaves for hist gradient boosting) with low learning rates, and logistic regression with very strong regularization (C≈0.0008). The optimism check is ≈0 for every model, so tuning is not inflating the scores, and the top five Optuna trials of each model score within 0.001 to 0.002 of each other, so the tuning surface is flat. The chosen preprocessing is also unstable (the decision tree chose one-hot encoding on the full data, but ordinal or target encoding in the nested folds), so I would not read much into those choices.
+
+All models share the same hard fold (fold 2, ROC-AUC 0.69 to 0.70), which points to the data split rather than the model.
+
+### Classification metrics and fairness (threshold 0.5, out-of-fold, class 1 = reoffended)
+
+| Model | Accuracy | Precision | Recall | F1 | FPR African-American | FPR Caucasian | Ratio | Difference |
+|---|---|---|---|---|---|---|---|---|
+| Gradient boosting | 0.68 | 0.68 | 0.56 | 0.61 | 0.29 | 0.16 | 1.81x | 0.13 |
+| Hist gradient boosting | 0.67 | 0.64 | 0.64 | 0.64 | 0.38 | 0.23 | 1.65x | 0.15 |
+| AdaBoost | 0.68 | 0.67 | 0.56 | 0.61 | 0.30 | 0.16 | 1.88x | 0.14 |
+| Oblique random forest | 0.68 | 0.67 | 0.56 | 0.61 | 0.30 | 0.16 | 1.88x | 0.14 |
+| Random forest | 0.67 | 0.64 | 0.63 | 0.64 | 0.37 | 0.22 | 1.68x | 0.15 |
+| Logistic regression | 0.65 | 0.71 | 0.39 | 0.50 | 0.19 | 0.09 | 2.11x | 0.10 |
+| Decision tree | 0.67 | 0.64 | 0.64 | 0.64 | 0.38 | 0.24 | 1.58x | 0.14 |
+| Naive Bayes | 0.62 | 0.74 | 0.24 | 0.37 | 0.11 | 0.04 | 2.75x | 0.07 |
+| COMPAS | – | – | – | – | 0.45 | 0.23 | 1.96x | 0.22 |
+
+**Interpretation.** The models split into two groups that reflect the operating point, not the algorithm. The decision tree, random forest and hist gradient boosting keep `class_weight='balanced'` from the config, so they flag more people (recall 0.63 to 0.64, precision 0.64, overall FPR about 0.30). Gradient boosting, AdaBoost and the oblique random forest have no class weighting and are more conservative (recall 0.56, precision 0.67 to 0.68, overall FPR about 0.22). Logistic regression is a special case: its search space included `class_weight`, ROC-AUC does not reward it, and tuning dropped it in four of five folds. That is why its recall fell to 0.39 (and varies widely across folds, std 0.115) even though its ROC-AUC barely changed. Naive Bayes is the extreme case, flagging almost nobody (recall 0.24).
+
+On fairness, every model still flags non-reoffending African-American defendants more often than Caucasian ones. The absolute gap (0.07 to 0.15) is smaller than COMPAS's (0.22), but ratios of 1.6x to 2.8x show the disparity is not removed. The ratio alone is misleading: the highest ratios (naive Bayes 2.75x, logistic regression 2.11x) belong to the models that flag the fewest people, and have the smallest absolute gaps, while the lowest ratios (decision tree 1.58x, hist gradient boosting 1.65x) belong to the models that flag the most. The fairness differences between models therefore mostly follow the threshold, and they should be compared at a common operating point. The Asian (n=21), Native American (n=6) and unknown (n=66) groups are too small to interpret.
+
+### Conclusions
+1. The signal is limited. Eight different model families plateau at about 0.73 ROC-AUC and 0.68 accuracy, consistent with the earlier weeks, so the features rather than the algorithm are the bottleneck.
+2. There is no statistically meaningful winner among the top six. Gradient boosting is nominally best, but logistic regression is within 0.005 and is far simpler and easier to explain.
+3. Model choice does not fix the racial FPR disparity. It mainly changes how many people get flagged, and the threshold is what trades recall against false positives.

@@ -5,12 +5,39 @@ Tuning uses the development set only, and scores every candidate by cross-valida
 whole pipeline on the same folds, on the selection metric. The best trial's score is the
 maximum of many noisy scores, so it is optimistic; the honest estimate of "tune, then refit"
 comes from `nested_cross_validate`.
+
+Preprocessing can be tuned too, because it lives inside the Pipeline and is re-fit on the
+training part of every fold. Ordinary parameters such as `prep__numeric__impute__strategy`
+are passed to `set_params` as they are. The two choices of *object*, the scaler
+(`prep__numeric__scale`) and the encoder (`prep__categorical__encode`), are written in the
+config as categorical choices of names ("robust", "target", ...) and turned into fresh
+objects by `_resolve_params`.
 """
 import numpy as np
 import optuna
 import pandas as pd
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
+
+from src.preprocessing import _SCALERS, _ENCODERS
+
+SCALER_KEY = "prep__numeric__scale"
+ENCODER_KEY = "prep__categorical__encode"
+
+
+def _resolve_params(params: dict, random_state: int) -> dict:
+    """
+    Turns the names chosen for the scaler and the encoder into real objects, using the same
+    registries as `build_preprocessor`; every other parameter is passed through unchanged.
+    A new object is built on every call, so trials never share a fitted scaler or encoder.
+    """
+    out = dict(params)
+    if SCALER_KEY in out:
+        factory = _SCALERS[out[SCALER_KEY]]
+        out[SCALER_KEY] = factory() if callable(factory) else factory      # "none" -> "passthrough"
+    if ENCODER_KEY in out:
+        out[ENCODER_KEY] = _ENCODERS[out[ENCODER_KEY]](random_state)
+    return out
 
 
 def tune_pipeline(pipeline, X, y, cv, scorer, search_space: dict, n_trials: int,
@@ -36,14 +63,14 @@ def tune_pipeline(pipeline, X, y, cv, scorer, search_space: dict, n_trials: int,
             else:
                 raise ValueError(f"Unknown search-space type for {name}: {spec['type']}. "
                                  "Options: int, float, categorical")
-        candidate = clone(pipeline).set_params(**params)
+        candidate = clone(pipeline).set_params(**_resolve_params(params, random_state))
         scores = cross_val_score(candidate, X, y, cv=cv, scoring=scorer, n_jobs=n_jobs)
         trial.set_user_attr("std", float(scores.std(ddof=1)))
         return scores.mean()
 
     study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=random_state))
     study.optimize(objective, n_trials=n_trials)
-    best_pipeline = clone(pipeline).set_params(**study.best_params)
+    best_pipeline = clone(pipeline).set_params(**_resolve_params(study.best_params, random_state))
     return best_pipeline, study
 
 
