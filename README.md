@@ -43,6 +43,7 @@ This table is updated after each practical class, so you can always see what cha
 | 5 | Hyperparameter tuning without leakage | New `src/tuning.py`: hyperparameters are tuned with **Optuna** (seeded TPE sampler) on the development set only -- every candidate is scored by stratified 5-fold CV of the **whole** pipeline (preprocessing re-fit in every fold of every trial), on the same folds for every candidate; the tuning procedure is estimated honestly by **nested cross-validation** (the tuning repeated inside each outer CV fold, scored on the outer fold it never saw), whose out-of-fold predictions now feed the classification report and fairness check; the reported "best trial" score is shown next to the nested one as an optimism check; the final model is the tuned pipeline refit on all development rows; `build_pipeline()` in `src/model.py` now builds the preprocessing + model `Pipeline` (one place to add a learned step later); `config.yaml` gains a `tuning` section (on/off, trials, inner folds, seed, one search space per model type) and the model becomes the decision tree; `optuna` added to `requirements.txt`. The locked test set is still untouched -- see "Hyperparameter tuning" below |
 | 6 | Ensembles in depth: random forest, oblique random forest, AdaBoost | Two new model types in `src/model.py`: `oblique_random_forest` (a forest of oblique trees built from scikit-learn parts -- every tree splits on its own random sparse linear combinations of the features, via `SparseRandomProjection` inside `BaggingClassifier`) and `adaboost` (AdaBoost over decision trees of a chosen depth; stumps by default), both registered in `_MODELS`; the random forest is now the model `main.py` runs (200 trees, all CPU cores); `config.yaml` gains search spaces for the three ensembles -- the forests tune tree size (`max_depth`, `min_samples_leaf`) and decorrelation (`max_features` / number of combinations) but not the number of trees, AdaBoost tunes its base trees' depth, its number of rounds and its learning rate; `corrected_paired_test()` in `src/evaluate.py` compares two models scored on the same folds (Nadeau & Bengio's corrected paired t-test), so a "winner" is only called when the difference is bigger than fold-to-fold noise; `scipy` listed in `requirements.txt` (it already came with scikit-learn, so nothing new to install) -- see "Ensembles" below |
 | 7 | Gradient boosting + evaluating with probabilities | Three new model types in `src/model.py`: `gradient_boosting` (scikit-learn's `GradientBoostingClassifier`: each shallow tree fits the gradient of the log-loss left by the trees before it), `hist_gradient_boosting` (the same idea on binned features: much faster on large data, and it handles missing values itself) and `naive_bayes` (`GaussianNB`, a fast probabilistic baseline); gradient boosting is now the model `main.py` runs, each with its search space in `config.yaml`; evaluation now reports **several metrics** (accuracy, balanced accuracy, precision, recall, F1, F-beta, ROC-AUC, PR-AUC) and one **selection metric** (`cv.selection_metric`, ROC-AUC) that tuning maximises and runs are ranked by; out-of-fold **probabilities** (not just labels) feed the reports, with a confusion matrix; `class_weight: balanced` in the commented examples of the models that support it; new `save_scores()` in `src/results.py`: every run adds a row to `results/runs.csv` (the model and its settings, the score on each fold, the no-model floor and the untuned score on the same folds), so any two runs on the same data and folds can be compared with `corrected_paired_test()`; the printed output was reorganised to be easier to read, with the full tables in the results file (optional: keep your own format if you prefer) -- see "Model evaluation" below |
+| 8 | XGBoost + feature selection | New model type `xgboost` (`XGBClassifier`, from the `xgboost` package: gradient boosting with extra regularisation, multi-threaded, handles missing values itself), now the model `main.py` runs, with its search space in `config.yaml`; **feature selection** as a learned step of the Pipeline: new `VoteSelector` class in `src/model.py` (a random forest, gradient boosting and an L1 logistic regression vote; features with at least `min_votes` votes are kept), placed between `"prep"` and `"model"` by `build_pipeline()` when the new `feature_selection` section of `config.yaml` switches it on, so it is re-fitted on the training rows of every fold (never on the rows it is scored on); with tuning on, `select__min_votes` is tuned with the model and assessed by nested CV; the pipeline caches fitted preprocessing and selection steps during a run (`Pipeline(memory=...)`, a temporary folder deleted at the end), so tuning doesn't refit them in every trial; the final model's kept features are printed, and the scoreboard records the selection setting -- see "Feature selection" below |
 
 ## Environment setup
 
@@ -344,3 +345,101 @@ On fairness, every model still flags non-reoffending African-American defendants
 1. The signal is limited. Eight different model families plateau at about 0.73 ROC-AUC and 0.68 accuracy, consistent with the earlier weeks, so the features rather than the algorithm are the bottleneck.
 2. There is no statistically meaningful winner among the top six. Gradient boosting is nominally best, but logistic regression is within 0.005 and is far simpler and easier to explain.
 3. Model choice does not fix the racial FPR disparity. It mainly changes how many people get flagged, and the threshold is what trades recall against false positives.
+
+
+# Week 8
+
+## Feature selection
+
+Set feature_selection.enabled in config.yaml to add the "select" step between preprocessing and the model. VoteSelector fits three models on the training rows (a random forest, gradient boosting, and an L1-penalised logistic regression); each votes for the features it finds useful (above-average importance, or a non-zero coefficient), and features with at least min_votes votes are kept. Because it learns from the labels, it lives inside the Pipeline and is re-fitted in every fold; selecting features on all rows before cross-validation would make the score optimistic. With tuning on, feature_selection.search_space is added to the model's search space, so min_votes is chosen with the model's hyperparameters and assessed by nested CV. The features the final model keeps are printed at the end of each run.
+
+XGBoost is a separate package: see "Installing XGBoost" below if import xgboost fails.
+
+### Installing XGBoost
+xgboost is in requirements.txt, so pip install -r requirements.txt (venv active) installs it. On its own: pip install xgboost. Check it worked, with the venv active:
+
+python -c "import xgboost; print(xgboost.__version__)"
+Windows: nothing extra: pip install xgboost installs a ready-made version. If it fails to build or install, update pip first (python -m pip install --upgrade pip) and make sure your Python is 64-bit (python -c "import struct; print(struct.calcsize('P') * 8)" should print 64).
+
+macOS: XGBoost needs the OpenMP library (for running on several CPU cores), which macOS doesn't ship. If import xgboost fails with XGBoostError, Library not loaded: libomp.dylib or similar:
+
+install Homebrew if you don't have it (the command is on its home page);
+run brew install libomp;
+open a new terminal, activate the venv, and try the import again.
+Works on both Apple Silicon (M1/M2/M3/M4) and Intel Macs. If you use conda instead of a venv, conda install -c conda-forge xgboost installs XGBoost together with its OpenMP library.
+
+Linux: on most distributions pip install xgboost just works. Two things can go wrong:
+
+it downloads a very large extra package (nvidia-nccl-..., a few hundred MB) for NVIDIA GPUs. If you have no NVIDIA GPU, or the download is too slow, install the CPU-only version instead: pip install xgboost-cpu (the code is identical: still import xgboost). If you do this, replace xgboost with xgboost-cpu in your copy of requirements.txt, so a reinstall doesn't fetch the large package again.
+a very old distribution may have no ready-made version and try to compile it. Update pip first (python -m pip install --upgrade pip); recent releases need glibc 2.28 or newer (Ubuntu 20.04+, Debian 10+, Fedora 29+).
+In a notebook (Jupyter / VS Code): No module named 'xgboost', although you installed it. The notebook runs on a different Python from the one pip installed into (e.g. you installed into the venv, but the notebook uses the system Python). Either:
+
+install from inside the notebook, into the Python it actually uses: run %pip install xgboost in a cell, then restart the kernel; or
+make your venv available as a kernel, once, with the venv active:
+pip install ipykernel
+python -m ipykernel install --user --name etai --display-name "ETAI (venv)"
+then choose ETAI (venv) as the notebook's kernel. The notebook then sees every package in requirements.txt.
+To check which Python a notebook is using: import sys; print(sys.executable). In the terminal: which python (macOS/Linux) or where python (Windows). They should point into the same venv folder.
+
+
+### Features kept
+Every final model keeps the same **2 of 10 features: `age` and `priors_count`**, regardless of whether the tuned `min_votes` was 1, 2 or 3. The logs list only the kept features, not the dropped ones.
+
+### Results (ROC-AUC, development set, 5,771 rows)
+
+| Model | Week 7 tuned (all features) | Default CV | Tuned nested CV (mean ± std) | Change vs Week 7 | Tuning gain | Optimism | Default gap | Tuned gap |
+|---|---|---|---|---|---|---|---|---|
+| Gradient boosting | 0.727 | 0.723 | **0.726 ± 0.013** | -0.001 | +0.003 | -0.001 | +0.019 | +0.005 |
+| XGBoost | – | 0.721 | 0.725 ± 0.012 | new | +0.004 | ≈0.000 | +0.027 | +0.006 |
+| Hist gradient boosting | 0.727 | 0.710 | 0.725 ± 0.013 | -0.002 | +0.015 | ≈0.000 | +0.051 | +0.008 |
+| Oblique random forest | 0.726 | 0.672 | 0.724 ± 0.012 | -0.002 | +0.052 | -0.001 | +0.106 | +0.014 |
+| Random forest | 0.726 | 0.672 | 0.724 ± 0.013 | -0.002 | +0.052 | -0.002 | +0.102 | +0.014 |
+| AdaBoost | 0.726 | 0.721 | 0.723 ± 0.013 | -0.003 | +0.002 | +0.001 | +0.005 | +0.012 |
+| Decision tree | 0.719 | 0.657 | 0.718 ± 0.014 | -0.001 | +0.061 | +0.001 | +0.117 | +0.016 |
+| Logistic regression | 0.722 | 0.716 | 0.717 ± 0.011 | -0.005 | +0.001 | +0.001 | +0.000 | +0.001 |
+| Naive Bayes | 0.705 | 0.704 | 0.708 ± 0.013 | +0.003 | +0.004 | ≈0.000 | +0.001 | +0.001 |
+| Dummy (floor) | 0.500 | 0.500 | – | – | – | – | – | – |
+
+Chosen hyperparameters (tuning on the whole development set; all models use `age` and `priors_count`):
+
+| Model | Hyperparameters |
+|---|---|
+| Gradient boosting | n_estimators=171, learning_rate=0.015, max_depth=3, min_samples_leaf=19, subsample=0.53, min_votes=3 |
+| XGBoost | n_estimators=156, learning_rate=0.177, max_depth=5, min_child_weight=2.28, subsample=0.67, colsample_bytree=0.62, reg_lambda=0.20, reg_alpha=0.34, gamma=3.52, min_votes=1 |
+| Hist gradient boosting | max_iter=82, learning_rate=0.113, max_leaf_nodes=4, min_samples_leaf=7, l2=0.0004, min_votes=1 |
+| Oblique random forest | max_depth=23, min_samples_leaf=169, n_components=10, min_votes=2 |
+| Random forest | max_depth=23, min_samples_leaf=74, max_features=1.0, min_votes=2 |
+| AdaBoost | base tree max_depth=3, n_estimators=398, learning_rate=0.100, min_votes=2 |
+| Decision tree | max_depth=5, min_samples_leaf=129, gini, min_votes=3 |
+| Logistic regression | C=0.0018, class_weight=balanced, mean imputation, robust scaling, target encoding, min_votes=3 |
+| Naive Bayes | var_smoothing=0.099, min_votes=2 |
+
+**Interpretation.** Removing eight of the ten features changed the tuned ROC-AUC by at most 0.005 for any model, well inside the fold-level standard deviation (0.011 to 0.014). Two features therefore reproduce the ranking power of ten, and the other eight add essentially nothing. Naive Bayes is the only model that improved (+0.003), which fits its independence assumption, since fewer correlated inputs help it. Logistic regression has the largest drop (-0.005), still within noise.
+
+The top eight models span only 0.009 ROC-AUC (0.717 to 0.726), less than one standard deviation, so they are statistically tied. Gradient boosting is nominally first, but boosted trees on two features perform the same as a heavily regularized logistic regression on two features, which suggests there is little interaction structure to exploit. Naive Bayes remains clearly behind (about 0.015 to 0.018 below the rest).
+
+Untuned scores moved more than tuned ones. The decision tree improved from 0.604 to 0.657 because fewer features means less to overfit, while the untuned forests dropped (random forest 0.683 to 0.672, oblique random forest 0.685 to 0.672), probably because two features give the trees little diversity to exploit. After tuning these differences disappear. Tuning still matters most for the models that overfit by default (decision tree +0.061, forests +0.052), because it shrinks their train/validation gap from about +0.10 to +0.12 down to +0.014 to +0.016. The optimism check is between -0.002 and +0.001 for every model, so tuning is not inflating the scores. All models again share the same hardest fold (fold 2, ROC-AUC 0.688 to 0.705), which points to the data split rather than the model.
+
+### Classification metrics and fairness (threshold 0.5, out-of-fold, class 1 = reoffended)
+
+| Model | Accuracy | Precision | Recall | F1 | FPR African-American | FPR Caucasian | Ratio | Difference |
+|---|---|---|---|---|---|---|---|---|
+| Gradient boosting | 0.68 | 0.68 | 0.56 | 0.61 | 0.29 | 0.16 | 1.81x | 0.13 |
+| XGBoost | 0.68 | 0.67 | 0.57 | 0.62 | 0.30 | 0.16 | 1.88x | 0.14 |
+| Hist gradient boosting | 0.67 | 0.63 | 0.66 | 0.65 | 0.41 | 0.25 | 1.64x | 0.16 |
+| Oblique random forest | 0.68 | 0.67 | 0.56 | 0.61 | 0.30 | 0.16 | 1.88x | 0.14 |
+| Random forest | 0.67 | 0.64 | 0.62 | 0.63 | 0.37 | 0.22 | 1.68x | 0.15 |
+| AdaBoost | 0.68 | 0.67 | 0.56 | 0.61 | 0.30 | 0.16 | 1.88x | 0.14 |
+| Decision tree | 0.67 | 0.65 | 0.59 | 0.62 | 0.34 | 0.20 | 1.70x | 0.14 |
+| Logistic regression | 0.66 | 0.66 | 0.53 | 0.59 | 0.30 | 0.17 | 1.76x | 0.13 |
+| Naive Bayes | 0.63 | 0.73 | 0.28 | 0.41 | 0.13 | 0.05 | 2.60x | 0.08 |
+| COMPAS | – | – | – | – | 0.45 | 0.23 | 1.96x | 0.22 |
+
+**Interpretation.** As in Week 7, the differences between models mostly reflect the operating point rather than the algorithm. Configurations that keep `class_weight='balanced'` (decision tree, random forest, hist gradient boosting) flag more people (recall 0.59 to 0.66, FPR for African-American defendants 0.34 to 0.41), and the unweighted models (gradient boosting, XGBoost, AdaBoost, oblique random forest) are more conservative (recall 0.56 to 0.57, FPR about 0.30). Naive Bayes flags the fewest people (recall 0.28). Logistic regression moved from recall 0.39 in Week 7 to 0.53, because most outer folds now chose `class_weight='balanced'`. Its recall is still unstable across folds (std 0.133), since fold 1 chose no class weighting (recall 0.30) and folds 2 to 5 chose balanced (0.58 to 0.63). The pooled figure therefore mixes two settings and is not a stable property of the model.
+
+On fairness, every model still flags non-reoffending African-American defendants more often than Caucasian ones (ratios 1.6x to 2.6x). The absolute gap (0.08 to 0.16) is smaller than COMPAS's (0.22), but the disparity is not removed. The highest ratio belongs to the model that flags the fewest people (naive Bayes), so models should be compared at a common threshold. The disparity persists even though only `age` and `priors_count` are used. A plausible explanation is that these two variables are correlated with race in this data, but the logs do not test this. The Asian (n=21), Native American (n=6) and unknown (n=66) groups are too small to interpret.
+
+### Conclusions
+1. `age` and `priors_count` carry nearly all of the usable signal. Eight of ten features can be dropped with no meaningful loss (at most 0.005 ROC-AUC).
+2. The top eight models are statistically tied at about 0.72 to 0.73 ROC-AUC, so the choice among them should rest on simplicity and operating point. A two-feature logistic regression or a shallow tree is easy to justify and to explain.
+3. Feature selection does not change the racial FPR disparity, and model choice mainly changes how many people are flagged.
