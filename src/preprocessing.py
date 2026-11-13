@@ -145,6 +145,11 @@ def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_so
     Returns (X, y, extras). `extras` holds the columns kept out of the features for auditing
     (the sensitive attribute and COMPAS's own score). On label-free data `y` is None --
     nothing downstream requires the target column to be present.
+
+    If `data_config` lists `class_names` (text labels in their order), the target is turned into
+    the numbers 0, 1, 2, ... in that order, which every model accepts (XGBoost needs them) and
+    which keeps the classes in a meaningful order (Low < Medium < High). A label that is not in
+    the list raises an error instead of silently becoming a missing value.
     """
     target = data_config["target"]
     sensitive_attr = data_config["sensitive_attr"]
@@ -152,6 +157,13 @@ def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_so
 
     df = add_missingness_indicators(df, mnar_indicator_sources)
     y = df[target] if target in df.columns else None
+    class_names = data_config.get("class_names")
+    if y is not None and class_names:
+        codes = y.map({name: i for i, name in enumerate(class_names)})
+        if codes.isna().any():
+            raise ValueError(f"Target values not in data.class_names {list(class_names)}: "
+                             f"{list(y[codes.isna()].unique())}")
+        y = codes.astype(int)
 
     extras_cols = [c for c in [sensitive_attr, "score_text"] if c in df.columns]
     extras = df[extras_cols].copy() if extras_cols else None
@@ -168,12 +180,13 @@ _SCALERS = {"none": "passthrough", "standard": StandardScaler, "minmax": MinMaxS
 # row is encoded with category means computed on the OTHER internal folds, never on its own
 # label. Without that, a row's own target leaks into its own feature value, and the model
 # learns to trust the encoding more than it deserves. Unseen categories at predict time
-# get the overall target mean.
+# get the overall target mean. target_type="auto" reads the target: two classes give one column
+# per feature as before, three or more give one column per feature per class.
 _ENCODERS = {
     "onehot": lambda seed: OneHotEncoder(handle_unknown="ignore", sparse_output=False),
     "ordinal": lambda seed: OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
     "count": lambda seed: CountEncoder(handle_unknown=0, handle_missing=0),
-    "target": lambda seed: TargetEncoder(target_type="binary", cv=StratifiedKFold(5, shuffle=True, random_state=seed)),
+    "target": lambda seed: TargetEncoder(target_type="auto", cv=StratifiedKFold(5, shuffle=True, random_state=seed)),
 }
 
 

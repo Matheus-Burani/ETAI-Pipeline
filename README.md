@@ -29,10 +29,6 @@ assessment algorithm actually used by US courts to help inform bail and sentenci
 
 ## Pipeline progress
 
-
-
-## Pipeline progress
-
 This table is updated after each practical class, so you can always see what changed in the pipeline and why -- it's a running log, not a fixed syllabus.
 
 | Week | Practical class focus | Added to the pipeline |
@@ -44,6 +40,7 @@ This table is updated after each practical class, so you can always see what cha
 | 6 | Ensembles in depth: random forest, oblique random forest, AdaBoost | Two new model types in `src/model.py`: `oblique_random_forest` (a forest of oblique trees built from scikit-learn parts -- every tree splits on its own random sparse linear combinations of the features, via `SparseRandomProjection` inside `BaggingClassifier`) and `adaboost` (AdaBoost over decision trees of a chosen depth; stumps by default), both registered in `_MODELS`; the random forest is now the model `main.py` runs (200 trees, all CPU cores); `config.yaml` gains search spaces for the three ensembles -- the forests tune tree size (`max_depth`, `min_samples_leaf`) and decorrelation (`max_features` / number of combinations) but not the number of trees, AdaBoost tunes its base trees' depth, its number of rounds and its learning rate; `corrected_paired_test()` in `src/evaluate.py` compares two models scored on the same folds (Nadeau & Bengio's corrected paired t-test), so a "winner" is only called when the difference is bigger than fold-to-fold noise; `scipy` listed in `requirements.txt` (it already came with scikit-learn, so nothing new to install) -- see "Ensembles" below |
 | 7 | Gradient boosting + evaluating with probabilities | Three new model types in `src/model.py`: `gradient_boosting` (scikit-learn's `GradientBoostingClassifier`: each shallow tree fits the gradient of the log-loss left by the trees before it), `hist_gradient_boosting` (the same idea on binned features: much faster on large data, and it handles missing values itself) and `naive_bayes` (`GaussianNB`, a fast probabilistic baseline); gradient boosting is now the model `main.py` runs, each with its search space in `config.yaml`; evaluation now reports **several metrics** (accuracy, balanced accuracy, precision, recall, F1, F-beta, ROC-AUC, PR-AUC) and one **selection metric** (`cv.selection_metric`, ROC-AUC) that tuning maximises and runs are ranked by; out-of-fold **probabilities** (not just labels) feed the reports, with a confusion matrix; `class_weight: balanced` in the commented examples of the models that support it; new `save_scores()` in `src/results.py`: every run adds a row to `results/runs.csv` (the model and its settings, the score on each fold, the no-model floor and the untuned score on the same folds), so any two runs on the same data and folds can be compared with `corrected_paired_test()`; the printed output was reorganised to be easier to read, with the full tables in the results file (optional: keep your own format if you prefer) -- see "Model evaluation" below |
 | 8 | XGBoost + feature selection | New model type `xgboost` (`XGBClassifier`, from the `xgboost` package: gradient boosting with extra regularisation, multi-threaded, handles missing values itself), now the model `main.py` runs, with its search space in `config.yaml`; **feature selection** as a learned step of the Pipeline: new `VoteSelector` class in `src/model.py` (a random forest, gradient boosting and an L1 logistic regression vote; features with at least `min_votes` votes are kept), placed between `"prep"` and `"model"` by `build_pipeline()` when the new `feature_selection` section of `config.yaml` switches it on, so it is re-fitted on the training rows of every fold (never on the rows it is scored on); with tuning on, `select__min_votes` is tuned with the model and assessed by nested CV; the pipeline caches fitted preprocessing and selection steps during a run (`Pipeline(memory=...)`, a temporary folder deleted at the end), so tuning doesn't refit them in every trial; the final model's kept features are printed, and the scoreboard records the selection setting -- see "Feature selection" below |
+| 9 | Beyond COMPAS -- Option B: three-class target (`score_text`) | Generalized the binary-only pipeline to support multiclass classification (`Low`, `Medium`, `High`) via `config_multiclass.yaml` while keeping `python main.py` backwards-compatible for binary COMPAS (`sys.argv[1]` selects the config file); text labels mapped to ordered integers `0, 1, 2` via `data.class_names` in `split_features_target()` (required by `XGBClassifier` and class-ordered reports); `TargetEncoder` switched from `target_type="binary"` to `"auto"`; `VoteSelector` updated to check L1 coefficients across all class rows (`.any(axis=0)`) instead of only `coef_[0]`; `report_proba()` added so `cross_validate_pipeline()` and `nested_cross_validate()` store a 1D probability array for 2 classes or a 2D `rows x classes` matrix for 3+ classes; `build_scorers()` extended with `fbeta_macro_<beta>` and multiclass metrics (`roc_auc_ovr`, `f1_macro`); `oof_classification_report()` and `fairness_report()` updated to use `argmax` predictions, a 3x3 labeled confusion matrix, and a false-High-rate demographic check when `oof_proba.ndim == 2` -- see "Beyond COMPAS" below |
 
 ## Environment setup
 
@@ -93,17 +90,16 @@ That's it -- activate, then run. If you don't see `(venv)` at the start of your 
 
 ## Running the pipeline
 
-With the environment active (see above), from the project's root
-folder, on any OS:
+With the virtual environment active, from the project root:
+
 ```bash
+# Run the original binary COMPAS pipeline (defaults to config.yaml)
 python main.py
+
+# Run Option B: three-class COMPAS risk category prediction
+python main.py config_multiclass.yaml
 ```
 
-This loads `config.yaml`, loads and preprocesses the data, trains the model, and prints:
-- **train accuracy and test accuracy, side by side.** Comparing the two is how you catch overfitting: if the model looks much better on the data it was trained on than on data it's never seen, it has memorised rather than learned something that generalises. 
-- a classification report on the test set
-- a false-positive-rate-by-race comparison between our model and
-  COMPAS's own score
 
 All of this is also saved to a timestamped file in `results/` (e.g.`results/run_20260916_143012.txt`), so it doesn't just scroll past in your terminal -- open it later, or change something in `config.yaml` (like the model type) and compare the new file to the last one.
 `results/` is created automatically the first time you run the
@@ -443,3 +439,38 @@ On fairness, every model still flags non-reoffending African-American defendants
 1. `age` and `priors_count` carry nearly all of the usable signal. Eight of ten features can be dropped with no meaningful loss (at most 0.005 ROC-AUC).
 2. The top eight models are statistically tied at about 0.72 to 0.73 ROC-AUC, so the choice among them should rest on simplicity and operating point. A two-feature logistic regression or a shallow tree is easy to justify and to explain.
 3. Feature selection does not change the racial FPR disparity, and model choice mainly changes how many people are flagged.
+
+# Week 9
+
+## Beyond COMPAS (Option B: Three-Class Target)
+
+For Week 9, the pipeline was extended to solve: predicting COMPAS's own three-class risk category (`score_text`: **Low** ~54%, **Medium** ~27%, **High** ~20%) from the same demographic and criminal-history features, while keeping the original binary COMPAS pipeline (`two_year_recid`) working unchanged.
+
+### How to run the configs
+
+With the virtual environment active, from the project root:
+
+```bash
+# Run the original binary COMPAS pipeline (defaults to config.yaml)
+python main.py
+
+# Run Option B: three-class COMPAS risk category prediction
+python main.py config_multiclass.yaml
+```
+### Main Changes to the pipeline
+
+| Component / File | What broke | How it was | The fix |
+|---|---|---|---|
+| **Entry point** (`main.py`) | Could only run `config.yaml` and did not pass class names to reports | `load_config()` was called with no arguments; report functions lacked `class_names` | Read `sys.argv[1]` (defaulting to `"config.yaml"`) and passed `config["data"].get("class_names")` to `oof_classification_report()` and `fairness_report()` |
+| **Feature & target split** (`config_multiclass.yaml`, `src/preprocessing.py`) | Target leakage risk, trailing space in `"score_text "`, and string labels (`"Low"`, `"Medium"`, `"High"`) crashed `XGBClassifier` and broke class ordering | `decile_score` (the 1–10 number behind `score_text`) gives the answer away, and `two_year_recid` is a future outcome not known when the score was given; alphabetical sorting turns `"High", "Low", "Medium"` into `0, 1, 2` | Dropped `decile_score` and `two_year_recid` in `config_multiclass.yaml`; mapped `y` to `0, 1, 2` in exact risk order (`["Low", "Medium", "High"]`) using `data.class_names` in `split_features_target()` |
+| **Target encoder** (`src/preprocessing.py`) | `ValueError` during preprocessing when fitting `TargetEncoder` on 3 classes | `_ENCODERS["target"]` hardcoded `TargetEncoder(target_type="binary")` | Changed `target_type="binary"` to `target_type="auto"` so scikit-learn uses binary encoding for 2 classes and multiclass encoding for 3+ classes |
+| **Feature selection** (`src/model.py`) | `VoteSelector` ignored features used by classes 1 and 2 in its L1 voter | In binary classification `lasso.coef_` has 1 row (`coef_[0]`), whereas with 3 classes it has shape `(3, n_features)` (one row per class) | Replaced `np.abs(lasso.coef_[0]) > 1e-8` with `(np.abs(lasso.coef_) > 1e-8).any(axis=0)` so a feature gets a vote if L1 keeps it non-zero for *any* class |
+| **CV & nested CV probabilities** (`src/evaluate.py`, `src/tuning.py`) | `ValueError` / lost class probabilities when storing `oof_proba` | Both `cross_validate_pipeline()` and `nested_cross_validate()` initialized `oof_proba = np.empty(len(X))` (1D) and sliced `predict_proba(X)[:, 1]` | Used `report_proba()` to return a 1D array for 2 classes or the full `(n_rows, n_classes)` matrix for 3+ classes, and initialized `oof_proba = np.empty((len(X),) + proba.shape[1:])` |
+| **Metrics & scorers** (`config_multiclass.yaml`, `src/evaluate.py`) | Binary metrics (`f1`, `precision`, `recall`, `roc_auc`, `fbeta_2`) failed on 3 classes | Binary metrics require a single positive class and a 1D probability vector | Switched config metrics to `roc_auc_ovr`, `f1_macro`, `precision_macro`, `recall_macro`, `accuracy`, `balanced_accuracy`, and added `fbeta_macro_<beta>` support in `build_scorers()` |
+| **Classification & fairness reports** (`src/evaluate.py`) | Thresholding (`oof_proba >= 0.5`), 2x2 confusion matrix, and binary FPR comparison against `score_text` failed | With 3 classes there is no single threshold on `P(1)`, the confusion matrix is 3x3, and `score_text` is now the target itself | When `oof_proba.ndim == 2`, predictions use `argmax(axis=1)`, the confusion matrix is 3x3 labeled with `class_names`, and `_multiclass_fairness_report()` computes the false-`High` rate per racial group |
+
+### Results (Development set, 5-fold stratified CV)
+
+**Target thresholds to reach in the same run:** `roc_auc_ovr >= 0.75`, `accuracy >= 0.63`, `f1_macro >= 0.53`.
+
+| Model | Tuned | `roc_auc_ovr` (mean ± std) | `accuracy

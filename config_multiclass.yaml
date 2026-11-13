@@ -1,0 +1,156 @@
+data:
+  path: "data/compas_two_year_recidivism.csv"
+  target: "score_text"                              # COMPAS's own risk category: Low / Medium / High
+  sensitive_attr: "race"                            # never a feature; used only for the fairness report
+  drop_columns: ["id", "decile_score", "two_year_recid"]  # kept in the data, never used as features
+  # decile_score is the target as a number (it would give the answer away). two_year_recid happens two
+  # years AFTER the score is given, so it is not known when the score is made.
+  class_names: ["Low", "Medium", "High"]            # the labels in order: become classes 0, 1, 2
+
+# Locked test set: never used to fit, tune or choose anything. Do not change once set.
+test_set:
+  size: 0.2
+  random_state: 42
+
+cv:
+  n_splits: 5
+  shuffle: true
+  random_state: 42
+  # Reported for every run. *_macro averages the classes with equal weight; roc_auc_ovr is each class vs the rest.
+  metrics: ["accuracy", "balanced_accuracy", "precision_macro", "recall_macro", "f1_macro", "roc_auc_ovr"]
+  selection_metric: "roc_auc_ovr"                   # one of metrics: what tuning maximises and runs are ranked by
+  n_jobs: 1                                         # folds in parallel; keep 1 when the model has its own n_jobs: -1
+
+diagnostics:
+  id_column: "id"
+  numeric_text_columns: ["priors_count", "prior_offenses"]
+  # "nan" catches real NaNs turned into text by the category cleanup.
+  placeholder_tokens: ["-", "?", "n/a", "N/A", "na", "NA", "", "nan"]
+  validity_rules:
+    age: {min: 18, max: 100}
+    decile_score: {min: 1, max: 10}
+    juv_fel_count: {min: 0}
+    priors_count: {min: 0, max: 60}
+  canonical_categories:
+    sex:
+      male: "Male"
+      female: "Female"
+    race:
+      african-american: "African-American"
+      african american: "African-American"
+      caucasian: "Caucasian"
+      hispanic: "Hispanic"
+      other: "Other"
+      asian: "Asian"
+      native american: "Native American"
+    c_charge_degree:
+      f: "F"
+      felony: "F"
+      m: "M"
+      misdemeanor: "M"
+    score_text:
+      low: "Low"
+      medium: "Medium"
+      high: "High"
+  redundant_columns: ["prior_offenses", "age_in_months", "juvenile_total"]
+
+preprocessing:
+  encoder: "target"                                 # onehot | ordinal | count | target
+  scaler: "robust"                                  # none | standard | minmax | robust
+  numeric_features: ["age", "juv_fel_count", "juv_misd_count", "juv_other_count", "priors_count"]
+  categorical_features: ["sex", "age_cat", "c_charge_degree"]
+  mnar_indicator_sources: ["priors_count", "c_charge_degree"]   # get a <col>_was_missing flag
+  random_state: 42                                  # target encoder's internal folds
+  imputation:
+    numeric_strategy: "median"
+    categorical_strategy: "most_frequent"
+
+model:
+  type: "xgboost"  # dummy | logistic_regression | naive_bayes | decision_tree | random_forest | oblique_random_forest | adaboost | gradient_boosting | hist_gradient_boosting | xgboost
+  # Labels are the numbers 0, 1, 2 = Low, Medium, High (data.class_names). class_weight {0: 1.0, 1: 1.2, 2: 1.1}: a mild push
+  # towards the two smaller classes. "balanced" raises macro F1 but costs accuracy; no weights give
+  # accuracy but a lower macro F1. Tested with logistic regression only.
+  params:
+    {n_estimators: 300, learning_rate: 0.05, max_depth: 4, random_state: 42, n_jobs: -1}
+  # Other models' params, to swap in. Replace the whole block above, never add to it.
+  # (GradientBoostingClassifier, GaussianNB and XGBoost take no class_weight; the oblique forest passes it to its trees.)
+  # logistic_regression:    {max_iter: 2000, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
+  # naive_bayes:            {}
+  # decision_tree:          {random_state: 42, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
+  # random_forest:          {n_estimators: 200, random_state: 42, n_jobs: -1, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
+  # oblique_random_forest:  {n_estimators: 200, n_components: 10, random_state: 42, n_jobs: -1, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
+  # adaboost:               {max_depth: 1, n_estimators: 200, learning_rate: 1.0, random_state: 42}
+  # gradient_boosting:      {random_state: 42}
+  # hist_gradient_boosting: {random_state: 42, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
+  # xgboost:                {n_estimators: 300, learning_rate: 0.05, max_depth: 4, random_state: 42, n_jobs: -1}
+
+# Learned step between preprocessing and the model: keeps the features that at least
+# min_votes of three models (random forest, gradient boosting, L1 logistic regression) choose.
+feature_selection:
+  # Off here: with three classes it kept fewer features and gave a slightly lower macro F1 in my tests
+  # (0.528 against 0.543). VoteSelector itself works with three classes: set true to try it.
+  enabled: false
+  min_votes: 2                                      # 1 (keep almost all) .. 3 (keep only unanimous)
+  random_state: 42
+  search_space:                                     # tuned together with the model when tuning is on
+    select__min_votes: {type: int, low: 1, high: 3}
+
+tuning:
+  enabled: true
+  n_trials: 30
+  n_splits: 5                                       # folds that score each candidate
+  random_state: 42                                  # seeds the sampler and those folds
+  # Keys are Pipeline parameter names. Types: int / float (low, high, log) or categorical (choices).
+  # Ensembles take minutes per run: use a small n_trials while testing.
+  search_spaces:
+    logistic_regression:
+      model__C: {type: float, low: 0.0001, high: 100, log: true}   # regularization strength, smaller = stronger
+      # class_weight is fixed in model.params above, so it is not tuned
+      prep__numeric__impute__strategy: {type: categorical, choices: ["median", "mean"]}
+      prep__numeric__scale: {type: categorical, choices: ["none", "standard", "robust"]}
+      prep__categorical__encode: {type: categorical, choices: ["onehot", "ordinal", "target"]}
+
+    decision_tree:
+      model__max_depth: {type: int, low: 1, high: 20}
+      model__min_samples_leaf: {type: int, low: 1, high: 200, log: true}
+      model__criterion: {type: categorical, choices: ["gini", "entropy"]}
+    random_forest:
+      model__max_depth: {type: int, low: 2, high: 30}
+      model__min_samples_leaf: {type: int, low: 1, high: 200, log: true}
+      model__max_features: {type: categorical, choices: ["sqrt", 0.5, 1.0]}
+    oblique_random_forest:
+      model__estimator__tree__max_depth: {type: int, low: 2, high: 30}
+      model__estimator__tree__min_samples_leaf: {type: int, low: 1, high: 200, log: true}
+      model__estimator__project__n_components: {type: int, low: 3, high: 10}   # <= number of features
+    adaboost:
+      model__estimator__max_depth: {type: int, low: 1, high: 8}
+      model__n_estimators: {type: int, low: 25, high: 400, log: true}
+      model__learning_rate: {type: float, low: 0.01, high: 1.0, log: true}
+    gradient_boosting:
+      model__n_estimators: {type: int, low: 25, high: 500, log: true}
+      model__learning_rate: {type: float, low: 0.01, high: 0.5, log: true}
+      model__max_depth: {type: int, low: 1, high: 6}
+      model__min_samples_leaf: {type: int, low: 1, high: 200, log: true}
+      model__subsample: {type: float, low: 0.5, high: 1.0}
+    hist_gradient_boosting:
+      model__max_iter: {type: int, low: 25, high: 500, log: true}
+      model__learning_rate: {type: float, low: 0.01, high: 0.5, log: true}
+      model__max_leaf_nodes: {type: int, low: 2, high: 63, log: true}
+      model__min_samples_leaf: {type: int, low: 5, high: 200, log: true}
+      model__l2_regularization: {type: float, low: 0.000001, high: 10.0, log: true}
+    naive_bayes:
+      model__var_smoothing: {type: float, low: 0.000000000001, high: 0.1, log: true}
+    xgboost:
+      model__n_estimators: {type: int, low: 50, high: 600, log: true}
+      model__learning_rate: {type: float, low: 0.01, high: 0.3, log: true}
+      model__max_depth: {type: int, low: 1, high: 8}
+      model__min_child_weight: {type: float, low: 1.0, high: 50.0, log: true}
+      model__subsample: {type: float, low: 0.5, high: 1.0}
+      model__colsample_bytree: {type: float, low: 0.5, high: 1.0}
+      model__reg_lambda: {type: float, low: 0.01, high: 10.0, log: true}
+      model__reg_alpha: {type: float, low: 0.001, high: 10.0, log: true}
+      model__gamma: {type: float, low: 0.0, high: 5.0}
+
+output:
+  results_dir: "results_multiclass"
+  scoreboard: "results_multiclass/runs.csv"                    # one row per run; delete it when the data, cleaning or folds change

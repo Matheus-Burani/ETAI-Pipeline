@@ -74,7 +74,9 @@ class VoteSelector(SelectorMixin, BaseEstimator):
     """
     Keeps the features chosen by at least `min_votes` of three models, fitted on the training
     rows only: a random forest and gradient boosting vote for features with above-average
-    importance, an L1-penalised logistic regression for features it doesn't shrink to zero.
+    importance, an L1-penalised logistic regression for features it doesn't shrink to zero (with
+    more than two classes: in at least one class). liblinear is kept for two classes so the
+    two-class selection does not change; saga is used for three or more.
     """
 
     def __init__(self, min_votes: int = 2, random_state=None):
@@ -84,10 +86,18 @@ class VoteSelector(SelectorMixin, BaseEstimator):
     def fit(self, X, y):
         forest = RandomForestClassifier(n_estimators=200, min_samples_leaf=20, random_state=self.random_state, n_jobs=-1).fit(X, y)
         booster = GradientBoostingClassifier(random_state=self.random_state).fit(X, y)
-        lasso = LogisticRegression(l1_ratio=1.0, C=0.01, solver="liblinear").fit(X, y)
+        if len(np.unique(y)) == 2:
+            # two classes: exactly as before
+            lasso = LogisticRegression(l1_ratio=1.0, C=0.01, solver="liblinear").fit(X, y)
+        else:
+            # three or more classes: liblinear can't, saga fits all the classes together
+            lasso = LogisticRegression(l1_ratio=1.0, C=0.01, solver="saga", max_iter=2000,
+                                       random_state=self.random_state).fit(X, y)
+        # "used" = not shrunk to zero in at least one class (with two classes, coef_ has one row)
+        lasso_used = (np.abs(lasso.coef_) > 1e-8).any(axis=0)
         self.votes_ = ((forest.feature_importances_ > forest.feature_importances_.mean()).astype(int)
                        + (booster.feature_importances_ > booster.feature_importances_.mean())
-                       + (np.abs(lasso.coef_[0]) > 1e-8))
+                       + lasso_used)
         self.support_ = self.votes_ >= self.min_votes
         return self
 

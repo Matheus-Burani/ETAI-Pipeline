@@ -1,0 +1,103 @@
+Run: 20261113_095946
+Model: logistic_regression  params={'max_iter': 2000, 'class_weight': {0: 1.0, 1: 1.2, 2: 1.1}}
+Preprocessing: encoder=target  scaler=robust
+CV: 5 stratified folds  shuffle=True  random_state=42
+Metrics: ['accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'roc_auc_ovr']  selection metric: roc_auc_ovr
+Feature selection: off
+Tuning: Optuna, 30 trials x 5 folds, nested CV  random_state=42
+Locked test set: size=0.2  random_state=42  (not evaluated)
+============================================================
+
+Hyperparameters from config_multiclass.yaml: {'max_iter': 2000, 'class_weight': {0: 1.0, 1: 1.2, 2: 1.1}}
+
+Cross-validation (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation    gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr
+    1  0.764       0.755  0.009     0.640              0.541            0.614         0.541     0.558        0.755
+    2  0.763       0.759  0.005     0.633              0.520            0.577         0.520     0.530        0.759
+    3  0.764       0.756  0.008     0.621              0.507            0.579         0.507     0.519        0.756
+    4  0.763       0.755  0.009     0.622              0.512            0.573         0.512     0.524        0.755
+    5  0.759       0.774 -0.015     0.637              0.531            0.582         0.531     0.543        0.774
+
+                   mean   std
+accuracy          0.631 0.008
+balanced_accuracy 0.522 0.014
+precision_macro   0.585 0.016
+recall_macro      0.522 0.014
+f1_macro          0.535 0.016
+roc_auc_ovr       0.760 0.008
+
+roc_auc_ovr: train-validation gap mean = +0.003
+
+No-model floor (dummy, same folds): roc_auc_ovr = 0.500
+
+Nested cross-validation (the tuning procedure, estimated honestly) (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation    gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr  inner_best  model__C prep__numeric__impute__strategy prep__numeric__scale prep__categorical__encode
+    1  0.766       0.757  0.009     0.639              0.545            0.613         0.545     0.562        0.757       0.763     0.122                          median                 none                   ordinal
+    2  0.765       0.761  0.004     0.639              0.530            0.584         0.530     0.541        0.761       0.762     0.112                          median                 none                   ordinal
+    3  0.765       0.759  0.007     0.633              0.520            0.592         0.520     0.534        0.759       0.763     0.182                          median                 none                   ordinal
+    4  0.765       0.757  0.008     0.624              0.517            0.573         0.517     0.528        0.757       0.761     0.018                          median                 none                   ordinal
+    5  0.762       0.773 -0.011     0.633              0.530            0.572         0.530     0.540        0.773       0.759     0.099                          median                 none                    onehot
+
+                   mean   std
+accuracy          0.634 0.006
+balanced_accuracy 0.528 0.011
+precision_macro   0.587 0.017
+recall_macro      0.528 0.011
+f1_macro          0.541 0.013
+roc_auc_ovr       0.761 0.007
+
+roc_auc_ovr: train-validation gap mean = +0.003
+
+Tuning on the whole development set (30 Optuna trials, metric: roc_auc_ovr)
+Best hyperparameters: {'model__C': 0.07936290288251843, 'prep__numeric__impute__strategy': 'median', 'prep__numeric__scale': 'none', 'prep__categorical__encode': 'ordinal'}
+Best mean CV score:   0.761  (the maximum over all trials -- optimistic)
+
+Top 5 trials:
+ trial  mean roc_auc_ovr  model__C prep__categorical__encode prep__numeric__impute__strategy prep__numeric__scale   std
+    23             0.761     0.079                   ordinal                          median                 none 0.007
+    24             0.761     0.109                   ordinal                          median                 none 0.007
+    26             0.761     0.170                   ordinal                          median                 none 0.007
+     3             0.761     0.122                   ordinal                          median                 none 0.007
+    25             0.761     0.116                   ordinal                            mean                 none 0.007
+
+Optimism check (nested CV):
+  tuning score inside the outer folds (inner_best) mean = 0.762
+  honest score on the outer folds (validation)     mean = 0.761
+  optimism = +0.000   -> report the honest one
+
+Out-of-fold predictions, development set (most likely class):
+
+             predicted Low  predicted Medium  predicted High
+true Low              2710               359              49
+true Medium            810               533             188
+true High              333               376             413
+
+              precision    recall  f1-score   support
+
+         Low       0.70      0.87      0.78      3118
+      Medium       0.42      0.35      0.38      1531
+        High       0.64      0.37      0.47      1122
+
+    accuracy                           0.63      5771
+   macro avg       0.59      0.53      0.54      5771
+weighted avg       0.62      0.63      0.61      5771
+
+False High rate by race (development set, out-of-fold)
+(share of people who were NOT truly High, but were predicted High)
+
+  Our model:
+    African-American     rate = 0.07  (n=2098)
+    Asian                rate = 0.00  (n=22)
+    Caucasian            rate = 0.03  (n=1698)
+    Hispanic             rate = 0.03  (n=458)
+    Native American      rate = 0.11  (n=9)
+    Other                rate = 0.02  (n=274)
+    unknown              rate = 0.08  (n=90)
+
+Final model: logistic_regression refit on all 5771 development rows.
+
+Scoreboard:
+            run               model  tuned feature_selection  roc_auc_ovr   std  untuned  floor
+20261113_095946 logistic_regression   True               off        0.761 0.007    0.760  0.500

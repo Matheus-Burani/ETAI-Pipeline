@@ -1,0 +1,112 @@
+Run: 20261113_113904
+Model: xgboost  params={'n_estimators': 300, 'learning_rate': 0.05, 'max_depth': 4, 'random_state': 42, 'n_jobs': -1}
+Preprocessing: encoder=target  scaler=robust
+CV: 5 stratified folds  shuffle=True  random_state=42
+Metrics: ['accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'roc_auc_ovr']  selection metric: roc_auc_ovr
+Feature selection: off
+Tuning: Optuna, 30 trials x 5 folds, nested CV  random_state=42
+Locked test set: size=0.2  random_state=42  (not evaluated)
+============================================================
+
+Hyperparameters from config_multiclass.yaml: {'n_estimators': 300, 'learning_rate': 0.05, 'max_depth': 4, 'random_state': 42, 'n_jobs': -1}
+
+Cross-validation (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation   gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr
+    1  0.798       0.762 0.035     0.635              0.529            0.572         0.529     0.532        0.762
+    2  0.798       0.751 0.047     0.618              0.507            0.535         0.507     0.504        0.751
+    3  0.799       0.757 0.042     0.627              0.514            0.553         0.514     0.511        0.757
+    4  0.800       0.739 0.061     0.618              0.502            0.548         0.502     0.507        0.739
+    5  0.795       0.768 0.027     0.625              0.513            0.546         0.513     0.516        0.768
+
+                   mean   std
+accuracy          0.625 0.007
+balanced_accuracy 0.513 0.010
+precision_macro   0.551 0.014
+recall_macro      0.513 0.010
+f1_macro          0.514 0.011
+roc_auc_ovr       0.756 0.011
+
+roc_auc_ovr: train-validation gap mean = +0.042
+
+No-model floor (dummy, same folds): roc_auc_ovr = 0.500
+
+Nested cross-validation (the tuning procedure, estimated honestly) (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation    gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr  inner_best  model__n_estimators  model__learning_rate  model__max_depth  model__min_child_weight  model__subsample  model__colsample_bytree  model__reg_lambda  model__reg_alpha  model__gamma
+    1  0.778       0.762  0.016     0.633              0.526            0.569         0.526     0.532        0.762       0.764                  117                 0.068                 4                   20.587             0.591                    0.563              0.037             0.060         2.125
+    2  0.782       0.760  0.022     0.626              0.514            0.551         0.514     0.514        0.760       0.766                  321                 0.019                 4                    2.791             0.514                    0.804              0.010             1.389         1.324
+    3  0.779       0.765  0.014     0.633              0.527            0.578         0.527     0.532        0.765       0.765                  344                 0.063                 7                   14.255             0.542                    0.741              0.135             0.179         2.278
+    4  0.784       0.755  0.029     0.624              0.515            0.555         0.515     0.518        0.755       0.766                  518                 0.015                 6                    1.239             0.539                    0.862              0.015             0.922         2.031
+    5  0.776       0.778 -0.002     0.633              0.527            0.561         0.527     0.530        0.778       0.761                  519                 0.015                 6                    1.294             0.510                    0.624              0.389             0.570         2.272
+
+                   mean   std
+accuracy          0.630 0.004
+balanced_accuracy 0.522 0.007
+precision_macro   0.563 0.011
+recall_macro      0.522 0.007
+f1_macro          0.525 0.009
+roc_auc_ovr       0.764 0.009
+
+roc_auc_ovr: train-validation gap mean = +0.016
+
+Tuning on the whole development set (30 Optuna trials, metric: roc_auc_ovr)
+Best hyperparameters: {'model__n_estimators': 152, 'model__learning_rate': 0.21087213803106708, 'model__max_depth': 4, 'model__min_child_weight': 5.469395626943765, 'model__subsample': 0.532346167279356, 'model__colsample_bytree': 0.600207248980329, 'model__reg_lambda': 0.015463756735429742, 'model__reg_alpha': 0.1999041851873739, 'model__gamma': 2.8497078958931814}
+Best mean CV score:   0.763  (the maximum over all trials -- optimistic)
+
+Top 5 trials:
+ trial  mean roc_auc_ovr  model__colsample_bytree  model__gamma  model__learning_rate  model__max_depth  model__min_child_weight  model__n_estimators  model__reg_alpha  model__reg_lambda  model__subsample   std
+    12             0.763                    0.600         2.850                 0.211                 4                    5.469                  152             0.200              0.015             0.532 0.008
+    27             0.763                    0.586         2.972                 0.138                 4                    7.296                  121             0.122              0.011             0.606 0.008
+     2             0.763                    0.683         0.998                 0.027                 5                    1.726                  145             1.383              0.233             0.646 0.008
+    16             0.763                    0.502         2.836                 0.109                 3                    6.578                  124             0.220              0.032             0.558 0.007
+     0             0.763                    0.578         3.006                 0.254                 6                   10.402                  126             2.915              0.015             0.578 0.008
+
+Optimism check (nested CV):
+  tuning score inside the outer folds (inner_best) mean = 0.764
+  honest score on the outer folds (validation)     mean = 0.764
+  optimism = +0.000   -> report the honest one
+
+Out-of-fold predictions, development set (most likely class):
+
+             predicted Low  predicted Medium  predicted High
+true Low              2786               254              78
+true Medium            919               352             260
+true High              376               251             495
+
+              precision    recall  f1-score   support
+
+         Low       0.68      0.89      0.77      3118
+      Medium       0.41      0.23      0.29      1531
+        High       0.59      0.44      0.51      1122
+
+    accuracy                           0.63      5771
+   macro avg       0.56      0.52      0.53      5771
+weighted avg       0.59      0.63      0.59      5771
+
+False High rate by race (development set, out-of-fold)
+(share of people who were NOT truly High, but were predicted High)
+
+  Our model:
+    African-American     rate = 0.10  (n=2098)
+    Asian                rate = 0.05  (n=22)
+    Caucasian            rate = 0.05  (n=1698)
+    Hispanic             rate = 0.05  (n=458)
+    Native American      rate = 0.11  (n=9)
+    Other                rate = 0.03  (n=274)
+    unknown              rate = 0.09  (n=90)
+
+Final model: xgboost refit on all 5771 development rows.
+
+Scoreboard:
+            run                  model  tuned feature_selection  roc_auc_ovr   std  untuned  floor
+20261113_113904                xgboost   True               off        0.764 0.009    0.756  0.500
+20261113_111258      gradient_boosting   True               off        0.763 0.009    0.759  0.500
+20261113_113246 hist_gradient_boosting   True               off        0.762 0.008    0.737  0.500
+20261113_095946    logistic_regression   True               off        0.761 0.007    0.760  0.500
+20261113_103138          random_forest   True               off        0.760 0.008    0.729  0.500
+20261113_101313    logistic_regression   True       min_votes 1        0.759 0.008    0.751  0.500
+20261113_104749  oblique_random_forest   True       min_votes 1        0.758 0.010    0.709  0.500
+20261113_105802               adaboost   True               off        0.758 0.006    0.748  0.500
+20261113_101123          decision_tree   True               off        0.743 0.010    0.614  0.500
+20261113_100910            naive_bayes   True               off        0.738 0.011    0.717  0.500

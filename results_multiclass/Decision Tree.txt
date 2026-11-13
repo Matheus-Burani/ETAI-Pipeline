@@ -1,0 +1,105 @@
+Run: 20261113_101123
+Model: decision_tree  params={'random_state': 42, 'class_weight': {0: 1.0, 1: 1.2, 2: 1.1}}
+Preprocessing: encoder=target  scaler=robust
+CV: 5 stratified folds  shuffle=True  random_state=42
+Metrics: ['accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'roc_auc_ovr']  selection metric: roc_auc_ovr
+Feature selection: off
+Tuning: Optuna, 30 trials x 5 folds, nested CV  random_state=42
+Locked test set: size=0.2  random_state=42  (not evaluated)
+============================================================
+
+Hyperparameters from config_multiclass.yaml: {'random_state': 42, 'class_weight': {0: 1.0, 1: 1.2, 2: 1.1}}
+
+Cross-validation (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation   gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr
+    1  0.735       0.617 0.117     0.530              0.471            0.475         0.471     0.473        0.617
+    2  0.728       0.622 0.105     0.520              0.464            0.458         0.464     0.460        0.622
+    3  0.717       0.590 0.128     0.505              0.438            0.438         0.438     0.438        0.590
+    4  0.727       0.613 0.114     0.534              0.466            0.470         0.466     0.468        0.613
+    5  0.721       0.629 0.092     0.538              0.481            0.480         0.481     0.481        0.629
+
+                   mean   std
+accuracy          0.525 0.013
+balanced_accuracy 0.464 0.016
+precision_macro   0.464 0.017
+recall_macro      0.464 0.016
+f1_macro          0.464 0.016
+roc_auc_ovr       0.614 0.015
+
+roc_auc_ovr: train-validation gap mean = +0.111
+
+No-model floor (dummy, same folds): roc_auc_ovr = 0.500
+
+Nested cross-validation (the tuning procedure, estimated honestly) (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation    gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr  inner_best  model__max_depth  model__min_samples_leaf model__criterion
+    1  0.760       0.748  0.012     0.622              0.531            0.556         0.531     0.537        0.748       0.742                16                      124             gini
+    2  0.763       0.741  0.022     0.614              0.513            0.541         0.513     0.517        0.741       0.748                11                      120             gini
+    3  0.762       0.736  0.026     0.614              0.516            0.533         0.516     0.516        0.736       0.749                20                       99          entropy
+    4  0.769       0.733  0.036     0.609              0.511            0.533         0.511     0.515        0.733       0.748                 6                       52          entropy
+    5  0.756       0.758 -0.003     0.632              0.540            0.588         0.540     0.553        0.758       0.743                 5                       65          entropy
+
+                   mean   std
+accuracy          0.618 0.009
+balanced_accuracy 0.522 0.013
+precision_macro   0.550 0.023
+recall_macro      0.522 0.013
+f1_macro          0.528 0.017
+roc_auc_ovr       0.743 0.010
+
+roc_auc_ovr: train-validation gap mean = +0.019
+
+Tuning on the whole development set (30 Optuna trials, metric: roc_auc_ovr)
+Best hyperparameters: {'model__max_depth': 18, 'model__min_samples_leaf': 149, 'model__criterion': 'entropy'}
+Best mean CV score:   0.744  (the maximum over all trials -- optimistic)
+
+Top 5 trials:
+ trial  mean roc_auc_ovr model__criterion  model__max_depth  model__min_samples_leaf   std
+    20             0.744          entropy                18                      149 0.011
+    24             0.744          entropy                15                      147 0.011
+     0             0.744             gini                 8                      149 0.012
+    28             0.744          entropy                 5                       99 0.010
+    21             0.743          entropy                17                      158 0.010
+
+Optimism check (nested CV):
+  tuning score inside the outer folds (inner_best) mean = 0.746
+  honest score on the outer folds (validation)     mean = 0.743
+  optimism = +0.003   -> report the honest one
+
+Out-of-fold predictions, development set (most likely class):
+
+             predicted Low  predicted Medium  predicted High
+true Low              2635               364             119
+true Medium            803               455             273
+true High              323               323             476
+
+              precision    recall  f1-score   support
+
+         Low       0.70      0.85      0.77      3118
+      Medium       0.40      0.30      0.34      1531
+        High       0.55      0.42      0.48      1122
+
+    accuracy                           0.62      5771
+   macro avg       0.55      0.52      0.53      5771
+weighted avg       0.59      0.62      0.60      5771
+
+False High rate by race (development set, out-of-fold)
+(share of people who were NOT truly High, but were predicted High)
+
+  Our model:
+    African-American     rate = 0.11  (n=2098)
+    Asian                rate = 0.00  (n=22)
+    Caucasian            rate = 0.06  (n=1698)
+    Hispanic             rate = 0.06  (n=458)
+    Native American      rate = 0.11  (n=9)
+    Other                rate = 0.07  (n=274)
+    unknown              rate = 0.11  (n=90)
+
+Final model: decision_tree refit on all 5771 development rows.
+
+Scoreboard:
+            run               model  tuned feature_selection  roc_auc_ovr   std  untuned  floor
+20261113_095946 logistic_regression   True               off        0.761 0.007    0.760  0.500
+20261113_101123       decision_tree   True               off        0.743 0.010    0.614  0.500
+20261113_100910         naive_bayes   True               off        0.738 0.011    0.717  0.500

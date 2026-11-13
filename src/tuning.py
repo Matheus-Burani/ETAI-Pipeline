@@ -19,6 +19,7 @@ import pandas as pd
 from sklearn.base import clone
 from sklearn.model_selection import cross_val_score
 
+from src.evaluate import report_proba
 from src.preprocessing import _SCALERS, _ENCODERS
 
 SCALER_KEY = "prep__numeric__scale"
@@ -85,7 +86,7 @@ def nested_cross_validate(pipeline, X, y, outer_cv, inner_cv, scorers: dict, sel
     of columns: `inner_best` (the tuning score inside that fold) and the hyperparameters chosen.
     """
     rows = []
-    oof_proba = np.empty(len(X))
+    oof_proba = None
     for fold, (train_idx, val_idx) in enumerate(outer_cv.split(X, y), start=1):
         X_train, y_train = X.iloc[train_idx], y.iloc[train_idx]
         X_val, y_val = X.iloc[val_idx], y.iloc[val_idx]
@@ -96,7 +97,10 @@ def nested_cross_validate(pipeline, X, y, outer_cv, inner_cv, scorers: dict, sel
 
         train_score = scorers[selection_metric](best_pipeline, X_train, y_train)
         val_scores = {name: scorer(best_pipeline, X_val, y_val) for name, scorer in scorers.items()}
-        oof_proba[val_idx] = best_pipeline.predict_proba(X_val)[:, 1]
+        proba = report_proba(best_pipeline, X_val)
+        if oof_proba is None:
+            oof_proba = np.empty((len(X),) + proba.shape[1:])
+        oof_proba[val_idx] = proba
         rows.append({"fold": fold, "train": train_score, "validation": val_scores[selection_metric],
                      "gap": train_score - val_scores[selection_metric], **val_scores,
                      "inner_best": study.best_value, **study.best_params})

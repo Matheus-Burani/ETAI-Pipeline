@@ -1,0 +1,111 @@
+Run: 20261113_113246
+Model: hist_gradient_boosting  params={'random_state': 42, 'class_weight': {0: 1.0, 1: 1.2, 2: 1.1}}
+Preprocessing: encoder=target  scaler=robust
+CV: 5 stratified folds  shuffle=True  random_state=42
+Metrics: ['accuracy', 'balanced_accuracy', 'precision_macro', 'recall_macro', 'f1_macro', 'roc_auc_ovr']  selection metric: roc_auc_ovr
+Feature selection: off
+Tuning: Optuna, 30 trials x 5 folds, nested CV  random_state=42
+Locked test set: size=0.2  random_state=42  (not evaluated)
+============================================================
+
+Hyperparameters from config_multiclass.yaml: {'random_state': 42, 'class_weight': {0: 1.0, 1: 1.2, 2: 1.1}}
+
+Cross-validation (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation   gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr
+    1  0.820       0.745 0.075     0.628              0.535            0.571         0.535     0.544        0.745
+    2  0.824       0.730 0.094     0.609              0.513            0.534         0.513     0.518        0.730
+    3  0.825       0.733 0.092     0.614              0.519            0.563         0.519     0.530        0.733
+    4  0.822       0.729 0.093     0.607              0.513            0.546         0.513     0.521        0.729
+    5  0.819       0.750 0.069     0.620              0.526            0.555         0.526     0.534        0.750
+
+                   mean   std
+accuracy          0.615 0.008
+balanced_accuracy 0.521 0.009
+precision_macro   0.554 0.014
+recall_macro      0.521 0.009
+f1_macro          0.530 0.011
+roc_auc_ovr       0.737 0.009
+
+roc_auc_ovr: train-validation gap mean = +0.085
+
+No-model floor (dummy, same folds): roc_auc_ovr = 0.500
+
+Nested cross-validation (the tuning procedure, estimated honestly) (5 stratified folds, selection metric: roc_auc_ovr)
+
+ fold  train  validation    gap  accuracy  balanced_accuracy  precision_macro  recall_macro  f1_macro  roc_auc_ovr  inner_best  model__max_iter  model__learning_rate  model__max_leaf_nodes  model__min_samples_leaf  model__l2_regularization
+    1  0.775       0.760  0.015     0.638              0.551            0.598         0.551     0.565        0.760       0.762              135                 0.249                      2                      115                     0.001
+    2  0.781       0.758  0.023     0.620              0.517            0.552         0.517     0.523        0.758       0.763               62                 0.030                      9                      108                     0.001
+    3  0.781       0.763  0.018     0.638              0.547            0.602         0.547     0.562        0.763       0.763               86                 0.085                      4                      104                     0.011
+    4  0.780       0.753  0.028     0.603              0.506            0.541         0.506     0.515        0.753       0.765              407                 0.020                      3                       91                     0.321
+    5  0.772       0.775 -0.002     0.629              0.530            0.563         0.530     0.539        0.775       0.759              314                 0.056                      2                       13                     0.002
+
+                   mean   std
+accuracy          0.626 0.015
+balanced_accuracy 0.530 0.019
+precision_macro   0.571 0.027
+recall_macro      0.530 0.019
+f1_macro          0.541 0.023
+roc_auc_ovr       0.762 0.008
+
+roc_auc_ovr: train-validation gap mean = +0.016
+
+Tuning on the whole development set (30 Optuna trials, metric: roc_auc_ovr)
+Best hyperparameters: {'model__max_iter': 120, 'model__learning_rate': 0.04662904446640318, 'model__max_leaf_nodes': 6, 'model__min_samples_leaf': 123, 'model__l2_regularization': 0.5513683212071152}
+Best mean CV score:   0.762  (the maximum over all trials -- optimistic)
+
+Top 5 trials:
+ trial  mean roc_auc_ovr  model__l2_regularization  model__learning_rate  model__max_iter  model__max_leaf_nodes  model__min_samples_leaf   std
+    14             0.762                     0.551                 0.047              120                      6                      123 0.009
+    17             0.762                     0.000                 0.062              183                      3                       66 0.009
+    24             0.762                     0.000                 0.070              163                      3                       17 0.009
+    28             0.762                     0.676                 0.048              134                      3                      183 0.009
+    11             0.761                     0.002                 0.065              248                      2                       39 0.010
+
+Optimism check (nested CV):
+  tuning score inside the outer folds (inner_best) mean = 0.763
+  honest score on the outer folds (validation)     mean = 0.762
+  optimism = +0.001   -> report the honest one
+
+Out-of-fold predictions, development set (most likely class):
+
+             predicted Low  predicted Medium  predicted High
+true Low              2637               408              73
+true Medium            790               511             230
+true High              317               343             462
+
+              precision    recall  f1-score   support
+
+         Low       0.70      0.85      0.77      3118
+      Medium       0.40      0.33      0.37      1531
+        High       0.60      0.41      0.49      1122
+
+    accuracy                           0.63      5771
+   macro avg       0.57      0.53      0.54      5771
+weighted avg       0.61      0.63      0.61      5771
+
+False High rate by race (development set, out-of-fold)
+(share of people who were NOT truly High, but were predicted High)
+
+  Our model:
+    African-American     rate = 0.10  (n=2098)
+    Asian                rate = 0.00  (n=22)
+    Caucasian            rate = 0.04  (n=1698)
+    Hispanic             rate = 0.04  (n=458)
+    Native American      rate = 0.11  (n=9)
+    Other                rate = 0.02  (n=274)
+    unknown              rate = 0.08  (n=90)
+
+Final model: hist_gradient_boosting refit on all 5771 development rows.
+
+Scoreboard:
+            run                  model  tuned feature_selection  roc_auc_ovr   std  untuned  floor
+20261113_111258      gradient_boosting   True               off        0.763 0.009    0.759  0.500
+20261113_113246 hist_gradient_boosting   True               off        0.762 0.008    0.737  0.500
+20261113_095946    logistic_regression   True               off        0.761 0.007    0.760  0.500
+20261113_103138          random_forest   True               off        0.760 0.008    0.729  0.500
+20261113_101313    logistic_regression   True       min_votes 1        0.759 0.008    0.751  0.500
+20261113_104749  oblique_random_forest   True       min_votes 1        0.758 0.010    0.709  0.500
+20261113_105802               adaboost   True               off        0.758 0.006    0.748  0.500
+20261113_101123          decision_tree   True               off        0.743 0.010    0.614  0.500
+20261113_100910            naive_bayes   True               off        0.738 0.011    0.717  0.500
