@@ -439,12 +439,11 @@ On fairness, every model still flags non-reoffending African-American defendants
 1. `age` and `priors_count` carry nearly all of the usable signal. Eight of ten features can be dropped with no meaningful loss (at most 0.005 ROC-AUC).
 2. The top eight models are statistically tied at about 0.72 to 0.73 ROC-AUC, so the choice among them should rest on simplicity and operating point. A two-feature logistic regression or a shallow tree is easy to justify and to explain.
 3. Feature selection does not change the racial FPR disparity, and model choice mainly changes how many people are flagged.
-
 # Week 9
 
 ## Beyond COMPAS (Option B: Three-Class Target)
 
-For Week 9, the pipeline was extended to solve: predicting COMPAS's own three-class risk category (`score_text`: **Low** ~54%, **Medium** ~27%, **High** ~20%) from the same demographic and criminal-history features, while keeping the original binary COMPAS pipeline (`two_year_recid`) working unchanged.
+For Week 9, the pipeline was extended to solve **Option B**: predicting COMPAS's own three-class risk category (`score_text`: **Low** 54.0%, **Medium** 26.5%, **High** 19.4%) from the same demographic and criminal-history features, while keeping the original binary COMPAS pipeline (`two_year_recid`) working unchanged.
 
 ### How to run the configs
 
@@ -457,20 +456,85 @@ python main.py
 # Run Option B: three-class COMPAS risk category prediction
 python main.py config_multiclass.yaml
 ```
-### Main Changes to the pipeline
 
-| Component / File | What broke | How it was | The fix |
+Multiclass runs are saved to their own output directory (`results_multiclass/` and `results_multiclass/runs.csv`) so the scoreboard does not mix binary and three-class runs.
+
+### What broke, why it broke, and how it was fixed
+
+| Component / File | What broke | Why it broke (hidden binary assumption) | How it was fixed |
 |---|---|---|---|
 | **Entry point** (`main.py`) | Could only run `config.yaml` and did not pass class names to reports | `load_config()` was called with no arguments; report functions lacked `class_names` | Read `sys.argv[1]` (defaulting to `"config.yaml"`) and passed `config["data"].get("class_names")` to `oof_classification_report()` and `fairness_report()` |
 | **Feature & target split** (`config_multiclass.yaml`, `src/preprocessing.py`) | Target leakage risk, trailing space in `"score_text "`, and string labels (`"Low"`, `"Medium"`, `"High"`) crashed `XGBClassifier` and broke class ordering | `decile_score` (the 1–10 number behind `score_text`) gives the answer away, and `two_year_recid` is a future outcome not known when the score was given; alphabetical sorting turns `"High", "Low", "Medium"` into `0, 1, 2` | Dropped `decile_score` and `two_year_recid` in `config_multiclass.yaml`; mapped `y` to `0, 1, 2` in exact risk order (`["Low", "Medium", "High"]`) using `data.class_names` in `split_features_target()` |
-| **Target encoder** (`src/preprocessing.py`) | `ValueError` during preprocessing when fitting `TargetEncoder` on 3 classes | `_ENCODERS["target"]` hardcoded `TargetEncoder(target_type="binary")` | Changed `target_type="binary"` to `target_type="auto"` so scikit-learn uses binary encoding for 2 classes and multiclass encoding for 3+ classes |
-| **Feature selection** (`src/model.py`) | `VoteSelector` ignored features used by classes 1 and 2 in its L1 voter | In binary classification `lasso.coef_` has 1 row (`coef_[0]`), whereas with 3 classes it has shape `(3, n_features)` (one row per class) | Replaced `np.abs(lasso.coef_[0]) > 1e-8` with `(np.abs(lasso.coef_) > 1e-8).any(axis=0)` so a feature gets a vote if L1 keeps it non-zero for *any* class |
+| **Target encoder** (`src/preprocessing.py`) | `ValueError` during preprocessing when fitting `TargetEncoder` on 3 classes | `_ENCODERS["target"]` hardcoded `TargetEncoder(target_type="binary")` | Changed `target_type="binary"` to `target_type="auto"` so scikit-learn uses binary encoding for 2 classes and multiclass encoding (one column per class) for 3+ classes |
+| **Feature selection** (`src/model.py`) | `ValueError` from `solver="liblinear"` on 3 classes, and `VoteSelector` ignored features used by classes 1 and 2 | `liblinear` does not support `n_classes >= 3` in modern scikit-learn; in binary classification `lasso.coef_` has 1 row (`coef_[0]`), whereas with 3 classes it has shape `(3, n_features)` | Switched L1 `LogisticRegression` to `solver="saga", max_iter=2000` and replaced `np.abs(lasso.coef_[0]) > 1e-8` with `(np.abs(lasso.coef_) > 1e-8).any(axis=0)` |
 | **CV & nested CV probabilities** (`src/evaluate.py`, `src/tuning.py`) | `ValueError` / lost class probabilities when storing `oof_proba` | Both `cross_validate_pipeline()` and `nested_cross_validate()` initialized `oof_proba = np.empty(len(X))` (1D) and sliced `predict_proba(X)[:, 1]` | Used `report_proba()` to return a 1D array for 2 classes or the full `(n_rows, n_classes)` matrix for 3+ classes, and initialized `oof_proba = np.empty((len(X),) + proba.shape[1:])` |
 | **Metrics & scorers** (`config_multiclass.yaml`, `src/evaluate.py`) | Binary metrics (`f1`, `precision`, `recall`, `roc_auc`, `fbeta_2`) failed on 3 classes | Binary metrics require a single positive class and a 1D probability vector | Switched config metrics to `roc_auc_ovr`, `f1_macro`, `precision_macro`, `recall_macro`, `accuracy`, `balanced_accuracy`, and added `fbeta_macro_<beta>` support in `build_scorers()` |
 | **Classification & fairness reports** (`src/evaluate.py`) | Thresholding (`oof_proba >= 0.5`), 2x2 confusion matrix, and binary FPR comparison against `score_text` failed | With 3 classes there is no single threshold on `P(1)`, the confusion matrix is 3x3, and `score_text` is now the target itself | When `oof_proba.ndim == 2`, predictions use `argmax(axis=1)`, the confusion matrix is 3x3 labeled with `class_names`, and `_multiclass_fairness_report()` computes the false-`High` rate per racial group |
 
-### Results (Development set, 5-fold stratified CV)
+### Feature selection and class weighting decisions
+
+* **When `feature_selection` helps vs. hurts:** With `target_type="auto"`, target encoding expands the 3 categorical features into 9 columns (16 total features), while ordinal encoding produces 10 total features. Comparing `feature_selection: off` against `VoteSelector` (`min_votes=1`) showed that keeping all features works better for regularized linear models and tree ensembles (`logistic_regression` rose from `0.759` to `0.761` `roc_auc_ovr` and `0.534` to `0.541` `f1_macro`, while `xgboost`, `gradient_boosting`, `hist_gradient_boosting`, and `random_forest` gained `+0.005` to `+0.013` `roc_auc_ovr` by retaining all features for subsampling and splits). Conversely, `VoteSelector` (`min_votes=1`, keeping **6 of 16 features**: `numeric__age`, `numeric__juv_fel_count`, `numeric__juv_misd_count`, `numeric__priors_count`, `categorical__age_cat_0`, `categorical__age_cat_1`) was retained for `oblique_random_forest` so random projections do not mix noisy columns into every oblique split.
+* **Custom class weights (`{0: 1.0, 1: 1.2, 2: 1.1}`):** Initial tests with `class_weight="balanced"` pushed `f1_macro` to `0.54`, but over-predicted `Medium` and `High` so heavily that overall accuracy fell to `0.58–0.59` (below the `0.63` target). Conversely, unweighted models (`None`) reached `0.63` accuracy but stalled at `0.51–0.53` `f1_macro`. Applying a mild class-weight nudge (`{0: 1.0, 1: 1.2, 2: 1.1}`) to the models that support `class_weight` (`logistic_regression`, `hist_gradient_boosting`, `random_forest`, `oblique_random_forest`, `decision_tree`) balanced minority-class recall against overall accuracy.
+
+### Results (ROC-AUC OvR, Accuracy, and Macro F1, development set, 5,771 rows)
 
 **Target thresholds to reach in the same run:** `roc_auc_ovr >= 0.75`, `accuracy >= 0.63`, `f1_macro >= 0.53`.
 
-| Model | Tuned | `roc_auc_ovr` (mean ± std) | `accuracy
+| Model | Feature selection | Default `roc_auc_ovr` | Tuned `roc_auc_ovr` (mean ± std) | Tuned `accuracy` (CV / OOF) | Tuned `f1_macro` (CV / OOF) | Tuned `balanced_accuracy` | Tuning gain | Optimism | Default gap | Tuned gap | Reaches all 3 targets? |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| XGBoost | off | 0.756 | **0.764 ± 0.009** | 0.630 ± 0.004 (0.63) | 0.525 ± 0.009 (0.53) | 0.522 ± 0.007 | +0.008 | ≈0.000 | +0.042 | +0.016 | Borderline (`f1_macro` 0.525 CV / 0.53 OOF) |
+| Gradient boosting | off | 0.759 | 0.763 ± 0.009 | 0.628 ± 0.009 (0.63) | 0.530 ± 0.013 (0.53) | 0.524 ± 0.010 | +0.004 | +0.001 | +0.032 | +0.015 | Borderline (`accuracy` 0.628 CV / 0.63 OOF) |
+| Hist gradient boosting (`{0:1.0, 1:1.2, 2:1.1}`) | off | 0.737 | 0.762 ± 0.008 | 0.626 ± 0.015 (0.63) | **0.541 ± 0.023 (0.54)** | **0.530 ± 0.019** | +0.025 | +0.001 | +0.085 | +0.016 | Borderline (`accuracy` 0.626 CV / 0.63 OOF) |
+| **Logistic regression (`{0:1.0, 1:1.2, 2:1.1}`)** | **off** | **0.760** | **0.761 ± 0.007** | **0.634 ± 0.006 (0.63)** | **0.541 ± 0.013 (0.54)** | 0.528 ± 0.011 | +0.001 | ≈0.000 | +0.003 | +0.003 | **Yes (all 3 in both CV & OOF)** |
+| Random forest (`{0:1.0, 1:1.2, 2:1.1}`) | off | 0.729 | 0.760 ± 0.008 | 0.623 ± 0.007 (0.62) | 0.533 ± 0.008 (0.53) | 0.524 ± 0.007 | +0.031 | ≈0.000 | +0.120 | +0.019 | No (`accuracy` 0.623) |
+| Logistic regression (`{0:1.0, 1:1.2, 2:1.1}`) | `min_votes 1` | 0.751 | 0.759 ± 0.008 | 0.631 ± 0.006 (0.63) | 0.534 ± 0.015 (0.53) | 0.522 ± 0.013 | +0.008 | -0.001 | ≈0.000 | +0.002 | Yes (`0.759 / 0.631 / 0.534`) |
+| Oblique random forest (`{0:1.0, 1:1.2, 2:1.1}`) | `min_votes 1` | 0.709 | 0.758 ± 0.010 | 0.622 ± 0.013 (0.62) | 0.538 ± 0.019 (0.54) | 0.529 ± 0.018 | +0.049 | -0.003 | +0.121 | +0.014 | No (`accuracy` 0.622) |
+| AdaBoost | off | 0.748 | 0.758 ± 0.006 | 0.627 ± 0.011 (0.63) | 0.524 ± 0.014 (0.52) | 0.516 ± 0.011 | +0.010 | +0.003 | +0.009 | +0.017 | No (`f1_macro` 0.524) |
+| Decision tree (`{0:1.0, 1:1.2, 2:1.1}`) | off | 0.614 | 0.743 ± 0.010 | 0.618 ± 0.009 (0.62) | 0.528 ± 0.017 (0.53) | 0.522 ± 0.013 | +0.129 | +0.003 | +0.111 | +0.019 | No |
+| Naive Bayes | off | 0.717 | 0.738 ± 0.011 | 0.596 ± 0.007 (0.60) | 0.431 ± 0.011 (0.43) | 0.442 ± 0.009 | +0.021 | -0.001 | +0.002 | ≈0.000 | No |
+| Dummy (floor) | `min_votes 2` | 0.500 | – | 0.540 ± 0.001 (0.54) | 0.234 ± 0.000 (0.23) | 0.333 ± 0.000 | – | – | +0.000 | – | No |
+
+Chosen hyperparameters (tuning on the whole development set):
+
+| Model | Hyperparameters |
+|---|---|
+| XGBoost | n_estimators=152, learning_rate=0.211, max_depth=4, min_child_weight=5.47, subsample=0.53, colsample_bytree=0.60, reg_lambda=0.015, reg_alpha=0.20, gamma=2.85 |
+| Gradient boosting | n_estimators=34, learning_rate=0.052, max_depth=4, min_samples_leaf=76, subsample=0.53 |
+| Hist gradient boosting | max_iter=120, learning_rate=0.047, max_leaf_nodes=6, min_samples_leaf=123, l2=0.551, fixed `class_weight={0: 1.0, 1: 1.2, 2: 1.1}` |
+| **Logistic regression (`off`)** | **C=0.079, fixed `class_weight={0: 1.0, 1: 1.2, 2: 1.1}`, median imputation, no scaling, ordinal encoding** |
+| Random forest | max_depth=16, min_samples_leaf=31, max_features=0.5, fixed `class_weight={0: 1.0, 1: 1.2, 2: 1.1}` |
+| Logistic regression (`min_votes 1`) | C=3.97, fixed `class_weight={0: 1.0, 1: 1.2, 2: 1.1}`, mean imputation, standard scaling, ordinal encoding, min_votes=1 |
+| Oblique random forest | max_depth=12, min_samples_leaf=130, n_components=10, fixed `class_weight={0: 1.0, 1: 1.2, 2: 1.1}`, min_votes=1 |
+| AdaBoost | base tree max_depth=4, n_estimators=72, learning_rate=0.139 |
+| Decision tree | max_depth=18, min_samples_leaf=149, criterion=entropy, fixed `class_weight={0: 1.0, 1: 1.2, 2: 1.1}` |
+| Naive Bayes | var_smoothing=0.091 |
+
+**Interpretation.** The dummy baseline predicts `"Low"` for every person and scores 0.500 `roc_auc_ovr`, 0.540 accuracy (matching the 54.0% share of `"Low"` in the development set, 3,118 of 5,771), and 0.234 `f1_macro` (since F1 is 0.70 for `"Low"` and 0.00 for `"Medium"` and `"High"`). Every model learns substantial signal above this floor (+0.24 to +0.26 on `roc_auc_ovr`), and ranks COMPAS's own risk categories better (~0.764 `roc_auc_ovr`) than it ranked actual two-year recidivism in Weeks 7 and 8 (~0.727 `roc_auc_ovr`). That makes sense: `score_text` is generated by a deterministic scoring formula over age and criminal history, whereas real-world recidivism has far more irreducible noise.
+
+Just as in Weeks 7 and 8, the top eight model configurations (`xgboost` 0.764, `gradient_boosting` 0.763, `hist_gradient_boosting` 0.762, `logistic_regression` 0.761, `random_forest` 0.760, `oblique_random_forest` 0.758, and `adaboost` 0.758) span only 0.006 `roc_auc_ovr`—smaller than a single fold-level standard deviation (0.006 to 0.010)—so they are statistically tied on ranking ability. Tuning again helps the models that overfit by default the most: the decision tree (+0.129), oblique random forest (+0.049), random forest (+0.031), and hist gradient boosting (+0.025) all see large gains because tuning shrinks their train-validation gaps from +0.085–0.121 down to +0.014–0.019 (via large leaf sizes of 31 to 149 rows, or 6-leaf trees in hist gradient boosting). By contrast, `logistic_regression` is already well regularized by default (`0.760` untuned vs. `0.761` tuned, with a `+0.003` train-validation gap). The optimism check is near zero (-0.003 to +0.003) across every model, confirming nested CV is not inflating the results. Fold 4 remains the hardest fold across all models (`roc_auc_ovr` 0.733 to 0.757) and Fold 5 the easiest (`0.753` to `0.778`).
+
+### Out-of-fold per-class performance and fairness (most likely class, `argmax`)
+
+| Model | Class weighting | Low F1 (Prec / Rec) | Medium F1 (Prec / Rec) | High F1 (Prec / Rec) | Macro F1 (OOF / CV) | Accuracy (OOF / CV) | False High: African-American | False High: Caucasian | Ratio |
+|---|---|---|---|---|---|---|---|---|---|
+| **Logistic regression (`off`)** | **`{0:1.0, 1:1.2, 2:1.1}`** | **0.78 (0.70 / 0.87)** | **0.38 (0.42 / 0.35)** | **0.47 (0.64 / 0.37)** | **0.54 (0.541)** | **0.63 (0.634)** | **0.07** | **0.03** | **2.33x** |
+| Hist gradient boosting | `{0:1.0, 1:1.2, 2:1.1}` | 0.77 (0.70 / 0.85) | 0.37 (0.40 / 0.33) | 0.49 (0.60 / 0.41) | **0.54 (0.541)** | 0.63 (0.626) | 0.10 | 0.04 | 2.50x |
+| Oblique random forest (`min_votes 1`) | `{0:1.0, 1:1.2, 2:1.1}` | 0.77 (0.71 / 0.84) | 0.36 (0.39 / 0.33) | 0.49 (0.59 / 0.42) | **0.54 (0.538)** | 0.62 (0.622) | 0.10 | 0.05 | 2.00x |
+| Logistic regression (`min_votes 1`) | `{0:1.0, 1:1.2, 2:1.1}` | 0.78 (0.70 / 0.88) | 0.37 (0.42 / 0.33) | 0.46 (0.65 / 0.36) | 0.53 (0.534) | 0.63 (0.631) | 0.07 | 0.03 | 2.33x |
+| Random forest | `{0:1.0, 1:1.2, 2:1.1}` | 0.77 (0.70 / 0.85) | 0.35 (0.40 / 0.31) | 0.48 (0.59 / 0.40) | 0.53 (0.533) | 0.62 (0.623) | 0.09 | 0.05 | 1.80x |
+| Decision tree | `{0:1.0, 1:1.2, 2:1.1}` | 0.77 (0.70 / 0.85) | 0.34 (0.40 / 0.30) | 0.48 (0.55 / 0.42) | 0.53 (0.528) | 0.62 (0.618) | 0.11 | 0.06 | 1.83x |
+| Gradient boosting | None | 0.77 (0.69 / 0.88) | 0.31 (0.40 / 0.26) | 0.50 (0.59 / 0.43) | 0.53 (0.530) | 0.63 (0.628) | 0.10 | 0.05 | 2.00x |
+| XGBoost | None | 0.77 (0.68 / 0.89) | 0.29 (0.41 / 0.23) | **0.51** (0.59 / **0.44**) | 0.53 (0.525) | 0.63 (0.630) | 0.10 | 0.05 | 2.00x |
+| AdaBoost | None | 0.77 (0.68 / 0.89) | 0.32 (0.40 / 0.27) | 0.48 (0.61 / 0.39) | 0.52 (0.524) | 0.63 (0.627) | 0.08 | 0.04 | 2.00x |
+| Naive Bayes | None | 0.75 (0.62 / 0.95) | 0.19 (0.35 / 0.13) | 0.35 (0.63 / 0.25) | 0.43 (0.431) | 0.60 (0.596) | 0.05 | 0.03 | 1.67x |
+| Dummy (floor) | None | 0.70 (0.54 / 1.00) | 0.00 (0.00 / 0.00) | 0.00 (0.00 / 0.00) | 0.23 (0.234) | 0.54 (0.540) | 0.00 | 0.00 | – |
+
+**Interpretation: Operating points, class weights, and why Logistic Regression wins overall.** While `xgboost` (`0.764`) and `gradient_boosting` (`0.763`) sit fractionally ahead on `roc_auc_ovr`, neither supports `class_weight` directly in `params`. Under unweighted `argmax` classification, both models achieve `0.630 / 0.628` accuracy by predicting `"Low"` heavily (`recall = 0.89 / 0.88`), which leaves `"Medium"` recall at `0.23–0.26` (`F1 = 0.29–0.31`) and holds `f1_macro` at `0.525–0.530` (right on the boundary of the `0.53` target).
+
+By contrast, adding the mild custom weights `{0: 1.0, 1: 1.2, 2: 1.1}` to `logistic_regression` (with `feature_selection: off`, run `20261113_095946`) lifts `"Medium"` recall to `0.35` (`F1 = 0.38`) while keeping `"Low"` recall at `0.87`. As a result, **`logistic_regression` is the only model that cleanly clears all three targets in both nested CV (`roc_auc_ovr = 0.761`, `accuracy = 0.634`, `f1_macro = 0.541`) and out-of-fold evaluation (`0.63` accuracy, `0.54` Macro F1)**, while also having the smallest train-validation gap (`+0.003`) and simplest model structure. `hist_gradient_boosting` with the same weights (`20261113_113246`) is a close runner-up (`roc_auc_ovr = 0.762`, `f1_macro = 0.541`, `accuracy = 0.626` CV / `0.63` OOF).
+
+**Fairness (False High rate by race).** In the three-class task, fairness is measured as the share of defendants who were **not** truly `"High"` (true `"Low"` or `"Medium"`, `n=2,098` African-American and `n=1,698` Caucasian in the development set) but were falsely predicted as `"High"` by our model. Across every model, African-American defendants are falsely placed into the `"High"` category at roughly **1.8x to 2.5x** the rate of Caucasian defendants (`0.07 vs. 0.03` for the winning `logistic_regression` model; `0.08–0.11 vs. 0.04–0.06` across the boosting and forest models). Even though `race` is excluded from the input features, the models learn the demographic proxy correlations embedded in `age` and `priors_count` that drive COMPAS's own High-risk assignments. Notably, `logistic_regression` achieves both the best target metric balance and the lowest absolute False High rate (`0.07` for African-American, `0.03` for Caucasian) among all competitive models.
+
+### Discussion & Reflections
+
+The hardest hidden binary assumption to find was inside `VoteSelector.fit()`, where two separate assumptions were stacked together: `solver="liblinear"` crashed on three classes in modern scikit-learn (fixed by switching to `solver="saga"`), while `np.abs(lasso.coef_[0]) > 1e-8` would have silently checked only the L1 coefficients for Class 0 (`Low`) and ignored features used to separate `Medium` and `High` (fixed with `.any(axis=0)`). Reaching all three target scores simultaneously (`roc_auc_ovr >= 0.75`, `accuracy >= 0.63`, and `f1_macro >= 0.53`) came down to managing the operating-point trade-off between overall accuracy and minority-class F1: unweighted tree boosters (`xgboost` 0.764, `gradient_boosting` 0.763) excelled at ranking and accuracy (`0.63`) but under-predicted `Medium` (`f1_macro = 0.525–0.530`), whereas `class_weight="balanced"` lifted `f1_macro` (`0.54`) at the cost of dropping accuracy to `0.59`. Applying mild custom weights (`{0: 1.0, 1: 1.2, 2: 1.1}`) to `logistic_regression` (with `feature_selection: off`) solved both at once (`roc_auc_ovr = 0.761`, `accuracy = 0.634`, `f1_macro = 0.541`). Across every single model, **Medium** (`decile_score` 5–7) remains by far the hardest class to predict, topping out at `0.38` F1 (compared to `0.77–0.78` for `Low` and `0.46–0.51` for `High`). Because `Medium` is an intermediate bucket squeezed between the majority `Low` class (54%) and the extreme `High` class (20%) along only a few coarse features (`age` and `priors_count`), its feature distribution heavily overlaps with both neighbors, causing more than half of true `Medium` defendants (`810` of `1,531` in the winning model) to be predicted as `Low` and `188` as `High`.
