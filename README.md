@@ -41,6 +41,7 @@ This table is updated after each practical class, so you can always see what cha
 | 7 | Gradient boosting + evaluating with probabilities | Three new model types in `src/model.py`: `gradient_boosting` (scikit-learn's `GradientBoostingClassifier`: each shallow tree fits the gradient of the log-loss left by the trees before it), `hist_gradient_boosting` (the same idea on binned features: much faster on large data, and it handles missing values itself) and `naive_bayes` (`GaussianNB`, a fast probabilistic baseline); gradient boosting is now the model `main.py` runs, each with its search space in `config.yaml`; evaluation now reports **several metrics** (accuracy, balanced accuracy, precision, recall, F1, F-beta, ROC-AUC, PR-AUC) and one **selection metric** (`cv.selection_metric`, ROC-AUC) that tuning maximises and runs are ranked by; out-of-fold **probabilities** (not just labels) feed the reports, with a confusion matrix; `class_weight: balanced` in the commented examples of the models that support it; new `save_scores()` in `src/results.py`: every run adds a row to `results/runs.csv` (the model and its settings, the score on each fold, the no-model floor and the untuned score on the same folds), so any two runs on the same data and folds can be compared with `corrected_paired_test()`; the printed output was reorganised to be easier to read, with the full tables in the results file (optional: keep your own format if you prefer) -- see "Model evaluation" below |
 | 8 | XGBoost + feature selection | New model type `xgboost` (`XGBClassifier`, from the `xgboost` package: gradient boosting with extra regularisation, multi-threaded, handles missing values itself), now the model `main.py` runs, with its search space in `config.yaml`; **feature selection** as a learned step of the Pipeline: new `VoteSelector` class in `src/model.py` (a random forest, gradient boosting and an L1 logistic regression vote; features with at least `min_votes` votes are kept), placed between `"prep"` and `"model"` by `build_pipeline()` when the new `feature_selection` section of `config.yaml` switches it on, so it is re-fitted on the training rows of every fold (never on the rows it is scored on); with tuning on, `select__min_votes` is tuned with the model and assessed by nested CV; the pipeline caches fitted preprocessing and selection steps during a run (`Pipeline(memory=...)`, a temporary folder deleted at the end), so tuning doesn't refit them in every trial; the final model's kept features are printed, and the scoreboard records the selection setting -- see "Feature selection" below |
 | 9 | Beyond COMPAS -- Option B: three-class target (`score_text`) | Generalized the binary-only pipeline to support multiclass classification (`Low`, `Medium`, `High`) via `config_multiclass.yaml` while keeping `python main.py` backwards-compatible for binary COMPAS (`sys.argv[1]` selects the config file); text labels mapped to ordered integers `0, 1, 2` via `data.class_names` in `split_features_target()` (required by `XGBClassifier` and class-ordered reports); `TargetEncoder` switched from `target_type="binary"` to `"auto"`; `VoteSelector` updated to check L1 coefficients across all class rows (`.any(axis=0)`) instead of only `coef_[0]`; `report_proba()` added so `cross_validate_pipeline()` and `nested_cross_validate()` store a 1D probability array for 2 classes or a 2D `rows x classes` matrix for 3+ classes; `build_scorers()` extended with `fbeta_macro_<beta>` and multiclass metrics (`roc_auc_ovr`, `f1_macro`); `oof_classification_report()` and `fairness_report()` updated to use `argmax` predictions, a 3x3 labeled confusion matrix, and a false-High-rate demographic check when `oof_proba.ndim == 2` -- see "Beyond COMPAS" below |
+| 10 | Missing values + a deployable pipeline | The numeric imputer is a config choice (`preprocessing.imputation.numeric_strategy`): `median`, `mean`, `knn` (`KNNImputer`), `iterative` (MICE with one completed dataset, `IterativeImputer`) or `random_forest` (the missForest idea: `IterativeImputer` with a random forest per column); the numeric columns are now scaled **before** they are imputed (scalers ignore gaps when fitting, and KNN needs one scale); none of the imputers looks at the target, so they also run on new data; the runs table and report record the imputer; `main.py` **saves the final fitted pipeline** to `models/model.joblib`; new **`predict.py`**: `python predict.py new.csv predictions.csv` cleans the file with the same rules (no rows dropped) and writes one row per input row (id, probability, prediction); `data/compas_new_people.csv` to try it -- see "Missing values" and "Predicting new data" below |
 
 ## Environment setup
 
@@ -538,3 +539,45 @@ By contrast, adding the mild custom weights `{0: 1.0, 1: 1.2, 2: 1.1}` to `logis
 ### Discussion & Reflections
 
 The hardest hidden binary assumption to find was inside `VoteSelector.fit()`, where two separate assumptions were stacked together: `solver="liblinear"` crashed on three classes in modern scikit-learn (fixed by switching to `solver="saga"`), while `np.abs(lasso.coef_[0]) > 1e-8` would have silently checked only the L1 coefficients for Class 0 (`Low`) and ignored features used to separate `Medium` and `High` (fixed with `.any(axis=0)`). Reaching all three target scores simultaneously (`roc_auc_ovr >= 0.75`, `accuracy >= 0.63`, and `f1_macro >= 0.53`) came down to managing the operating-point trade-off between overall accuracy and minority-class F1: unweighted tree boosters (`xgboost` 0.764, `gradient_boosting` 0.763) excelled at ranking and accuracy (`0.63`) but under-predicted `Medium` (`f1_macro = 0.525–0.530`), whereas `class_weight="balanced"` lifted `f1_macro` (`0.54`) at the cost of dropping accuracy to `0.59`. Applying mild custom weights (`{0: 1.0, 1: 1.2, 2: 1.1}`) to `logistic_regression` (with `feature_selection: off`) solved both at once (`roc_auc_ovr = 0.761`, `accuracy = 0.634`, `f1_macro = 0.541`). Across every single model, **Medium** (`decile_score` 5–7) remains by far the hardest class to predict, topping out at `0.38` F1 (compared to `0.77–0.78` for `Low` and `0.46–0.51` for `High`). Because `Medium` is an intermediate bucket squeezed between the majority `Low` class (54%) and the extreme `High` class (20%) along only a few coarse features (`age` and `priors_count`), its feature distribution heavily overlaps with both neighbors, causing more than half of true `Medium` defendants (`810` of `1,531` in the winning model) to be predicted as `Low` and `188` as `High`.
+
+# Week 10: missing values and predicting new data
+
+## Changes
+
+### Missing values
+
+Gaps in categorical columns are filled with the most frequent value. For numeric columns, `preprocessing.imputation.numeric_strategy` chooses how:
+
+| `numeric_strategy` | Fills a gap with | Notes |
+|---|---|---|
+| `median` / `mean` | the column's median / mean on the training rows | fast baselines |
+| `knn` | the mean of the `n_neighbors` most similar rows | needs scaled columns (the pipeline scales first) |
+| `iterative` | a prediction from the other numeric columns, refined over `max_iter` rounds (MICE, one completed dataset) | |
+| `random_forest` | the same, with a random forest per column (missForest) | the slowest |
+
+All of them are fitted on the training rows of each fold, inside the Pipeline, and none uses the target, so the same imputer runs on new data in `predict.py`. They only see the numeric columns. The `<col>_was_missing` flags (`mnar_indicator_sources`) keep the fact that a value was missing, for the columns where that is informative.
+
+### Predicting new data
+
+At the end of every run, `main.py` saves the final model (the whole fitted Pipeline: imputers, encoders, selected features and model, refit on all development rows) to `models/model.joblib` (`output.model_path` in `config.yaml`; each run overwrites it). To predict a CSV with the same columns as the training data (the target isn't needed):
+
+```bash
+python main.py                                                   # train, evaluate, save models/model.joblib
+python predict.py data/compas_new_people.csv predictions.csv     # predict
+```
+
+The output has one row per input row: the id, the probability of reoffending within two years, and the prediction (1 if the probability is at least 0.5). The new file is cleaned with the rules in `config.yaml` and never de-duplicated: every row gets a prediction, including rows with gaps, placeholder values, categories not seen in training, or a person repeated twice. For the three-class model, add `--config config_multiclass.yaml`: the output then has one probability per class and the most likely class.
+
+## Results
+
+The five imputers were compared with the same model and settings: `hist_gradient_boosting` with its default hyperparameters (`random_state: 42`, `class_weight: balanced`), tuning off, and the same 5 CV folds for every run. The p-values come from `corrected_paired_test()` on the per-fold ROC-AUC, against `median`.
+
+| Imputer | roc_auc: mean ± std | vs median: difference | folds won | p-value |
+|---|---|---|---|---|
+| median | 0.717 ± 0.020 | n/a | n/a | n/a |
+| knn | 0.716 ± 0.018 | -0.0008 | 2/5 | 0.55 |
+| mean | 0.716 ± 0.019 | -0.0009 | 3/5 | 0.72 |
+| iterative | 0.716 ± 0.016 | -0.0013 | 3/5 | 0.75 |
+| random_forest | 0.716 ± 0.019 | -0.0004 | 3/5 | 0.91 |
+
+All five imputers score within 0.0013 ROC-AUC of `median` (0.716-0.717), the corrected paired test gives p between 0.55 and 0.91, and every difference is much smaller than the fold-to-fold std (0.016-0.020), so I found no evidence that a more elaborate imputer helps. I keep `median`: it is the simplest and cheapest, and `knn`, `iterative` and `random_forest` fit more and give nothing back. This is plausible because few values are missing: on the development rows, about 7% of `priors_count`, 3% of `juv_fel_count` and 2% of `age`.

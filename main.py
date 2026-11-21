@@ -7,12 +7,14 @@ model) on the development set (several metrics, and the no-model floor on the sa
 -> [if tuning is enabled: nested CV of the tuning procedure, then tuning on all development rows]
 -> out-of-fold reports -> refit on all development rows -> scoreboard + full report
 """
+import os
 import shutil
 import sys
 import tempfile
 import warnings
 from datetime import datetime
 
+import joblib
 import optuna
 import yaml
 from sklearn.model_selection import StratifiedKFold
@@ -62,8 +64,9 @@ def main(config_path: str = "config.yaml"):
     n_jobs = cv_config.get("n_jobs", 1)
     selection_config = config.get("feature_selection") or {}
     selection_enabled = selection_config.get("enabled", False)
+    imputer = config["preprocessing"].get("imputation", {}).get("numeric_strategy", "median")
     print(f"Model: {model_type}   |   selection metric: {selection_metric}   |   "
-          f"{cv_config['n_splits']}-fold CV   |   feature selection: "
+          f"{cv_config['n_splits']}-fold CV   |   imputer: {imputer}   |   feature selection: "
           f"{'min_votes ' + str(selection_config.get('min_votes', 2)) if selection_enabled else 'off'}")
     print(f"Data:  {len(X_dev)} development rows   |   {len(X_test)} test rows locked away (not used)")
 
@@ -136,6 +139,7 @@ def main(config_path: str = "config.yaml"):
 
     row = {"run": run, "data": config["data"]["path"], "model": model_type, "tuned": tuning_enabled,
            "encoder": config["preprocessing"]["encoder"], "scaler": config["preprocessing"]["scaler"],
+           "imputer": imputer,
            "feature_selection": (f"min_votes {pipeline.named_steps['select'].min_votes}" if selection_enabled else "off"),
            "params": str(config["model"].get("params")), "tuned_params": str(study.best_params) if tuning_enabled else "",
            "metric": selection_metric, "mean": final_scores["validation"].mean(),
@@ -144,15 +148,23 @@ def main(config_path: str = "config.yaml"):
     runs = save_scores(config.get("output", {}).get("scoreboard", "results/runs.csv"), row)
     same = runs[(runs["data"] == row["data"]) & (runs["metric"] == selection_metric)]
     board = (same.sort_values("mean", ascending=False)
-             [["run", "model", "tuned", "feature_selection", "mean", "std", "untuned", "floor"]]
+             [["run", "model", "tuned", "imputer", "feature_selection", "mean", "std", "untuned", "floor"]]
              .rename(columns={"mean": selection_metric})
              .to_string(index=False, float_format=lambda v: f"{v:.3f}"))
     print(f"\nScoreboard (runs on the same data and metric; best first)\n{board}")
     report += f"\nScoreboard:\n{board}\n"
 
     shutil.rmtree(cache_dir, ignore_errors=True)
+
+    # The final fitted pipeline: what predict.py loads to predict new data.
+    model_path = config.get("output", {}).get("model_path", "models/model.joblib")
+    os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
+    pipeline.set_params(memory=None)                # the cache folder was deleted; the saved model doesn't need it
+    joblib.dump(pipeline, model_path)
+
     path = save_run(config.get("output", {}).get("results_dir", "results"), run, config, report)
-    print(f"\n{refit}\nFull report (per-fold tables, tuning, confusion matrix, fairness): {path}")
+    print(f"\n{refit}\nFull report (per-fold tables, tuning, confusion matrix, fairness): {path}"
+          f"\nSaved model (for predict.py): {model_path}")
 
 
 if __name__ == "__main__":

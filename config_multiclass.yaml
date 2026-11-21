@@ -62,16 +62,19 @@ preprocessing:
   mnar_indicator_sources: ["priors_count", "c_charge_degree"]   # get a <col>_was_missing flag
   random_state: 42                                  # target encoder's internal folds
   imputation:
-    numeric_strategy: "median"
+    numeric_strategy: "median"                        # median | mean | knn | iterative | random_forest
     categorical_strategy: "most_frequent"
+    n_neighbors: 5                                  # knn
+    max_iter: 10                                    # iterative, random_forest
+    n_estimators: 50                                # random_forest (trees per column)
 
 model:
-  type: "xgboost"  # dummy | logistic_regression | naive_bayes | decision_tree | random_forest | oblique_random_forest | adaboost | gradient_boosting | hist_gradient_boosting | xgboost
+  type: "logistic_regression"  # dummy | logistic_regression | naive_bayes | decision_tree | random_forest | oblique_random_forest | adaboost | gradient_boosting | hist_gradient_boosting | xgboost
   # Labels are the numbers 0, 1, 2 = Low, Medium, High (data.class_names). class_weight {0: 1.0, 1: 1.2, 2: 1.1}: a mild push
   # towards the two smaller classes. "balanced" raises macro F1 but costs accuracy; no weights give
   # accuracy but a lower macro F1. Tested with logistic regression only.
   params:
-    {n_estimators: 300, learning_rate: 0.05, max_depth: 4, random_state: 42, n_jobs: -1}
+    {max_iter: 2000, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
   # Other models' params, to swap in. Replace the whole block above, never add to it.
   # (GradientBoostingClassifier, GaussianNB and XGBoost take no class_weight; the oblique forest passes it to its trees.)
   # logistic_regression:    {max_iter: 2000, class_weight: {0: 1.0, 1: 1.2, 2: 1.1}}
@@ -153,4 +156,5 @@ tuning:
 
 output:
   results_dir: "results_multiclass"
+  model_path: "models/model_multiclass.joblib"      # the final fitted pipeline, used by predict.py (overwritten each run)
   scoreboard: "results_multiclass/runs.csv"                    # one row per run; delete it when the data, cleaning or folds change
