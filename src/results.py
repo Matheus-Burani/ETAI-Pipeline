@@ -29,6 +29,10 @@ def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
     selection = config.get("feature_selection") or {}
     selection_line = (f"VoteSelector, min_votes={selection.get('min_votes', 2)} (before tuning)"
                       if selection.get("enabled") else "off")
+    anomaly = config.get("anomaly") or {}
+    anomaly_method = anomaly.get("method", "none")
+    anomaly_line = ("off" if anomaly_method == "none" else anomaly_method
+                    + (f", n_neighbors={anomaly.get('n_neighbors', 20)}" if anomaly_method == "lof" else ""))
     header = (
         f"Run: {run}\n"
         f"Model: {config['model']['type']}  params={config['model'].get('params')}\n"
@@ -39,6 +43,7 @@ def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
         f"CV: {cv['n_splits']} stratified folds  shuffle={cv.get('shuffle', True)}  "
         f"random_state={cv.get('random_state')}\n"
         f"Metrics: {cv['metrics']}  selection metric: {cv['selection_metric']}\n"
+        f"Anomaly score: {anomaly_line}\n"
         f"Feature selection: {selection_line}\n"
         f"Tuning: {tuning_line}\n"
         f"Locked test set: size={config['test_set']['size']}  "

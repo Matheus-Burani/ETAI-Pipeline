@@ -42,6 +42,9 @@ This table is updated after each practical class, so you can always see what cha
 | 8 | XGBoost + feature selection | New model type `xgboost` (`XGBClassifier`, from the `xgboost` package: gradient boosting with extra regularisation, multi-threaded, handles missing values itself), now the model `main.py` runs, with its search space in `config.yaml`; **feature selection** as a learned step of the Pipeline: new `VoteSelector` class in `src/model.py` (a random forest, gradient boosting and an L1 logistic regression vote; features with at least `min_votes` votes are kept), placed between `"prep"` and `"model"` by `build_pipeline()` when the new `feature_selection` section of `config.yaml` switches it on, so it is re-fitted on the training rows of every fold (never on the rows it is scored on); with tuning on, `select__min_votes` is tuned with the model and assessed by nested CV; the pipeline caches fitted preprocessing and selection steps during a run (`Pipeline(memory=...)`, a temporary folder deleted at the end), so tuning doesn't refit them in every trial; the final model's kept features are printed, and the scoreboard records the selection setting -- see "Feature selection" below |
 | 9 | Beyond COMPAS -- Option B: three-class target (`score_text`) | Generalized the binary-only pipeline to support multiclass classification (`Low`, `Medium`, `High`) via `config_multiclass.yaml` while keeping `python main.py` backwards-compatible for binary COMPAS (`sys.argv[1]` selects the config file); text labels mapped to ordered integers `0, 1, 2` via `data.class_names` in `split_features_target()` (required by `XGBClassifier` and class-ordered reports); `TargetEncoder` switched from `target_type="binary"` to `"auto"`; `VoteSelector` updated to check L1 coefficients across all class rows (`.any(axis=0)`) instead of only `coef_[0]`; `report_proba()` added so `cross_validate_pipeline()` and `nested_cross_validate()` store a 1D probability array for 2 classes or a 2D `rows x classes` matrix for 3+ classes; `build_scorers()` extended with `fbeta_macro_<beta>` and multiclass metrics (`roc_auc_ovr`, `f1_macro`); `oof_classification_report()` and `fairness_report()` updated to use `argmax` predictions, a 3x3 labeled confusion matrix, and a false-High-rate demographic check when `oof_proba.ndim == 2` -- see "Beyond COMPAS" below |
 | 10 | Missing values + a deployable pipeline | The numeric imputer is a config choice (`preprocessing.imputation.numeric_strategy`): `median`, `mean`, `knn` (`KNNImputer`), `iterative` (MICE with one completed dataset, `IterativeImputer`) or `random_forest` (the missForest idea: `IterativeImputer` with a random forest per column); the numeric columns are now scaled **before** they are imputed (scalers ignore gaps when fitting, and KNN needs one scale); none of the imputers looks at the target, so they also run on new data; the runs table and report record the imputer; `main.py` **saves the final fitted pipeline** to `models/model.joblib`; new **`predict.py`**: `python predict.py new.csv predictions.csv` cleans the file with the same rules (no rows dropped) and writes one row per input row (id, probability, prediction); `data/compas_new_people.csv` to try it -- see "Missing values" and "Predicting new data" below |
+| 11 | Outliers: Isolation Forest and LOF | New `AnomalyScore` step in `src/preprocessing.py`: an Isolation Forest (`-score_samples`, the theory's s(x)) or a Local Outlier Factor (`novelty=True`, so new people can be scored; training rows get their proper `negative_outlier_factor_`) fitted on the training rows of each fold, appending one column, `anomaly_score`, after the preprocessor and before feature selection; `build_pipeline()` takes an `anomaly_config`, switched on by the new `anomaly` section of `config.yaml` (`method: none` by default); the runs table, scoreboard and report record the anomaly method; `predict.py` is unchanged (the saved Pipeline contains the fitted detector); new `check_anomalies.py` (reoffend rate of the most unusual people); `compare_imputers.py --by anomaly` compares runs by anomaly method -- see "Outliers" below |
+| 11 | Outliers and anomaly detection | New `AnomalyScore` class in `src/preprocessing.py`: an Isolation Forest or a Local Outlier Factor (`novelty=True`, so it can score new rows) fitted on the training rows of each fold, which appends an `anomaly_score` column (higher = more unusual) to the preprocessed features; `build_pipeline()` places it right after `"prep"` (before feature selection, which can keep or drop it) when the new `anomaly` section of `config.yaml` sets `method` to `isolation_forest` or `lof` (`none` by default); the runs table, the printed header and the report record the anomaly method; nothing changes in `predict.py`: the saved Pipeline already contains the fitted detector -- see "Anomaly scores" below |
+
 
 ## Environment setup
 
@@ -474,8 +477,8 @@ Multiclass runs are saved to their own output directory (`results_multiclass/` a
 
 ### Feature selection and class weighting decisions
 
-* **When `feature_selection` helps vs. hurts:** With `target_type="auto"`, target encoding expands the 3 categorical features into 9 columns (16 total features), while ordinal encoding produces 10 total features. Comparing `feature_selection: off` against `VoteSelector` (`min_votes=1`) showed that keeping all features works better for regularized linear models and tree ensembles (`logistic_regression` rose from `0.759` to `0.761` `roc_auc_ovr` and `0.534` to `0.541` `f1_macro`, while `xgboost`, `gradient_boosting`, `hist_gradient_boosting`, and `random_forest` gained `+0.005` to `+0.013` `roc_auc_ovr` by retaining all features for subsampling and splits). Conversely, `VoteSelector` (`min_votes=1`, keeping **6 of 16 features**: `numeric__age`, `numeric__juv_fel_count`, `numeric__juv_misd_count`, `numeric__priors_count`, `categorical__age_cat_0`, `categorical__age_cat_1`) was retained for `oblique_random_forest` so random projections do not mix noisy columns into every oblique split.
-* **Custom class weights (`{0: 1.0, 1: 1.2, 2: 1.1}`):** Initial tests with `class_weight="balanced"` pushed `f1_macro` to `0.54`, but over-predicted `Medium` and `High` so heavily that overall accuracy fell to `0.58–0.59` (below the `0.63` target). Conversely, unweighted models (`None`) reached `0.63` accuracy but stalled at `0.51–0.53` `f1_macro`. Applying a mild class-weight nudge (`{0: 1.0, 1: 1.2, 2: 1.1}`) to the models that support `class_weight` (`logistic_regression`, `hist_gradient_boosting`, `random_forest`, `oblique_random_forest`, `decision_tree`) balanced minority-class recall against overall accuracy.
+**When `feature_selection` helps vs. hurts:** With `target_type="auto"`, target encoding expands the 3 categorical features into 9 columns (16 total features), while ordinal encoding produces 10 total features. Comparing `feature_selection: off` against `VoteSelector` (`min_votes=1`) showed that keeping all features works better for regularized linear models and tree ensembles (`logistic_regression` rose from `0.759` to `0.761` `roc_auc_ovr` and `0.534` to `0.541` `f1_macro`, while `xgboost`, `gradient_boosting`, `hist_gradient_boosting`, and `random_forest` gained `+0.005` to `+0.013` `roc_auc_ovr` by retaining all features for subsampling and splits). Conversely, `VoteSelector` (`min_votes=1`, keeping **6 of 16 features**: `numeric__age`, `numeric__juv_fel_count`, `numeric__juv_misd_count`, `numeric__priors_count`, `categorical__age_cat_0`, `categorical__age_cat_1`) was retained for `oblique_random_forest` so random projections do not mix noisy columns into every oblique split.
+**Custom class weights (`{0: 1.0, 1: 1.2, 2: 1.1}`):** Initial tests with `class_weight="balanced"` pushed `f1_macro` to `0.54`, but over-predicted `Medium` and `High` so heavily that overall accuracy fell to `0.58–0.59` (below the `0.63` target). Conversely, unweighted models (`None`) reached `0.63` accuracy but stalled at `0.51–0.53` `f1_macro`. Applying a mild class-weight nudge (`{0: 1.0, 1: 1.2, 2: 1.1}`) to the models that support `class_weight` (`logistic_regression`, `hist_gradient_boosting`, `random_forest`, `oblique_random_forest`, `decision_tree`) balanced minority-class recall against overall accuracy.
 
 ### Results (ROC-AUC OvR, Accuracy, and Macro F1, development set, 5,771 rows)
 
@@ -581,3 +584,57 @@ The five imputers were compared with the same model and settings: `hist_gradient
 | random_forest | 0.716 ± 0.019 | -0.0004 | 3/5 | 0.91 |
 
 All five imputers score within 0.0013 ROC-AUC of `median` (0.716-0.717), the corrected paired test gives p between 0.55 and 0.91, and every difference is much smaller than the fold-to-fold std (0.016-0.020), so I found no evidence that a more elaborate imputer helps. I keep `median`: it is the simplest and cheapest, and `knn`, `iterative` and `random_forest` fit more and give nothing back. This is plausible because few values are missing: on the development rows, about 7% of `priors_count`, 3% of `juv_fel_count` and 2% of `age`.
+
+# Week 11: outliers
+
+## Invalid, extreme, anomalous
+
+Invalid values (age 150, negative priors) were already turned into gaps by `validity_rules`. Extreme values are kept: the 6 people with 30+ priors are adults aged 39–61 with long records, not errors, and a deployed model can't delete a person. So the question is not how to remove outliers but how unusual each person is, and whether that helps the model.
+
+## The `AnomalyScore` step
+
+A learned step of the Pipeline, right after `"prep"` (so its input is already imputed, scaled and encoded) and before `"select"` (so feature selection can keep or drop it). It is fitted on the training rows of each fold and scores any rows, so it never sees the validation fold and runs unchanged in `predict.py`.
+
+```yaml
+anomaly:
+  method: "none"          # none | isolation_forest | lof
+  n_neighbors: 20         # lof: larger than the largest group of identical rows (14 here)
+  random_state: 42        # isolation_forest
+```
+
+- `isolation_forest`: the score is `-score_samples(X)`, about 0.5 for ordinary rows and close to 1 for anomalies. No scaling needed.
+- `lof`: `novelty=True`, so new people can be scored; on the training rows the step uses `negative_outlier_factor_`, so a row is not counted as its own neighbour. `n_neighbors` must be larger than the largest group of identical rows (14 on COMPAS): with k = 5 the scores explode to hundreds of millions.
+
+
+## Results
+
+**Are the unusual people the ones who reoffend?** `python check_anomalies.py` (development rows, top 5% by score):
+
+| Method | People in top 5% | Reoffend rate, top 5% | Reoffend rate, rest | Rank correlation score vs reoffended |
+|---|---|---|---|---|
+| isolation_forest | 289 | 0.561 | 0.445 | 0.048 |
+| lof | 294 | 0.548 | 0.445 | 0.069 |
+
+The most unusual people reoffend somewhat more often (56% against 45%), but over all the rows the score barely ranks who reoffends (Spearman 0.05–0.07).
+
+**Does it help the model?** `hist_gradient_boosting` with its default hyperparameters (`random_state: 42`, `class_weight: balanced`), KNN imputer, feature selection off, tuning off, the same 5 CV folds for each run. p-values from `python compare_imputers.py --by anomaly --baseline none` (corrected paired t-test on the per-fold ROC-AUC):
+
+| Anomaly | roc_auc: mean ± std | vs none: difference | folds won | p-value |
+|---|---|---|---|---|
+| none | 0.716 ± 0.018 | n/a | n/a | n/a |
+| isolation_forest | 0.708 ± 0.022 | -0.0077 | 1/5 | 0.30 |
+| lof | 0.711 ± 0.019 | -0.0050 | 1/5 | 0.24 |
+
+**With tuning on** (the best configuration: the same model, KNN imputer, feature selection off, Optuna with 30 trials, ROC-AUC from nested CV on the same 5 outer folds). `python compare_imputers.py --by anomaly --baseline none --tuned true`:
+
+| Anomaly | roc_auc: mean ± std (nested CV) | vs none: difference | folds won | p-value |
+|---|---|---|---|---|
+| none | 0.728 ± 0.015 | n/a | n/a | n/a |
+| isolation_forest | 0.725 ± 0.013 | -0.0035 | 1/5 | 0.25 |
+| lof | 0.725 ± 0.017 | -0.0031 | 1/5 | 0.25 |
+
+Tuning closes most of the gap (from about -0.008 / -0.005 untuned to about -0.003), but the score still doesn't help: no score wins on 4 of 5 folds for both methods. With feature selection on, the selector drops the Isolation Forest score and keeps the LOF one.
+
+## Conclusions
+
+The anomaly score does not help on COMPAS, with or without tuning: both methods are slightly below no score and win only 1 of 5 folds, and neither difference is bigger than fold-to-fold noise. The best model is still tuned `hist_gradient_boosting` without the score (0.728). A likely reason: gradient boosting already finds the rare combinations (many juvenile records with many priors) by splitting on the columns themselves, so a score built from the same columns adds little information and some noise. `method` stays `"none"` in `config.yaml`.
